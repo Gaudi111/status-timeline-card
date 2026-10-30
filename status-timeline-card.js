@@ -1,8 +1,8 @@
 /*!
  * Status Timeline Card for Home Assistant
  * Daily on/off timelines for up to 3 entities (grouped bars), configurable
- * logical day (e.g. 04:00 -> 04:00), up to 10 days, total on-time per bar,
- * per-entity colors, OFF-state mapping and in-bar duration labels.
+ * logical day (e.g. 04:00 -> 04:00), up to 10 days, total on-time and duty
+ * cycle per bar, per-entity colors, OFF-state mapping and in-bar duration labels.
  *
  * Versioning: YEAR.MONTH.SUBVERSION  (see CHANGELOG.md)
  *
@@ -10,7 +10,7 @@
  * https://github.com/andregoncalvespires/schedule-timeline-card
  */
 
-const CARD_VERSION = "2026.10.3";
+const CARD_VERSION = "2026.10.4";
 const CARD_TAG = "status-timeline-card";
 const EDITOR_TAG = "status-timeline-card-editor";
 const DAY_MS = 86400000;
@@ -19,6 +19,7 @@ const MAX_ENTITIES = 3;
 const PALETTE = ["#2196f3", "#ff9800", "#4caf50"];
 const UNAV_STATES = ["unavailable", "unknown", "none", ""];
 const DEFAULT_ON_STATES = ["on", "open", "home", "playing", "heat", "cool", "heating", "cooling", "active", "detected", "true"];
+const DUTY_BASES = ["elapsed", "window", "available"];
 
 const DEFAULTS = {
   days: 7,
@@ -33,6 +34,9 @@ const DEFAULTS = {
   invert: false,
   show_total: true,
   total_format: "hm",
+  show_duty_cycle: true,
+  duty_cycle_basis: "elapsed",
+  duty_cycle_decimals: 0,
   show_summary: true,
   show_hours: true,
   show_now: true,
@@ -53,17 +57,20 @@ const I18N = {
   en: {
     total: "Total", avg: "avg/day", days: "days", loading: "Loading history…",
     error: "Error loading history", not_found: "Entity not found", on: "On", off: "Off",
-    unavailable: "Unavailable",
+    unavailable: "Unavailable", duty: "Duty cycle",
+    basis_elapsed: "of elapsed time", basis_window: "of full day", basis_available: "of available time",
   },
   es: {
     total: "Total", avg: "prom/día", days: "días", loading: "Cargando historial…",
     error: "Error al cargar el historial", not_found: "Entidad no encontrada", on: "Encendido",
-    off: "Apagado", unavailable: "No disponible",
+    off: "Apagado", unavailable: "No disponible", duty: "Ciclo de trabajo",
+    basis_elapsed: "del tiempo transcurrido", basis_window: "del día completo", basis_available: "del tiempo disponible",
   },
   pt: {
     total: "Total", avg: "média/dia", days: "dias", loading: "A carregar histórico…",
     error: "Erro ao carregar histórico", not_found: "Entidade não encontrada", on: "Ligado",
-    off: "Desligado", unavailable: "Indisponível",
+    off: "Desligado", unavailable: "Indisponível", duty: "Ciclo de trabalho",
+    basis_elapsed: "do tempo decorrido", basis_window: "do dia completo", basis_available: "do tempo disponível",
   },
 };
 
@@ -118,11 +125,10 @@ function fmtMin(min) {
 
 /**
  * Validates the logical-day window. Returns { startMin, endMin, lenMin }.
- *  - day_end == day_start            -> full 24 h day
- *  - day_end <  day_start            -> ends on the following calendar day (< 24 h)
- *  - day_end >  day_start            -> only allowed with partial_day: true (same-day window).
- *    Otherwise the window would be read as ending the next day, exceeding 24 h and
- *    overlapping the following day's start -> the same records would be counted twice.
+ *  - day_end == day_start  -> full 24 h day
+ *  - day_end <  day_start  -> ends on the following calendar day (< 24 h)
+ *  - day_end >  day_start  -> only allowed with partial_day: true (same-day window);
+ *    otherwise the day would overlap the next one and count records twice.
  */
 function validateWindow(dayStart, dayEnd, partialDay) {
   const startMin = parseTime(dayStart);
@@ -212,18 +218,41 @@ function buildIntervals(changes, now, ec) {
   return out;
 }
 
+/** Clips intervals to a window. Returns blocks, on-time and unavailable-time (ms). */
 function clipToWindow(intervals, start, end, now) {
   const limit = Math.min(end, now);
   const blocks = [];
-  let onMs = 0;
-  if (limit <= start) return { blocks, onMs };
+  let onMs = 0, unavMs = 0;
+  if (limit <= start) return { blocks, onMs, unavMs };
+  let covered = 0;
   for (const it of intervals) {
     if (it.b <= start || it.a >= limit) continue;
     const a = Math.max(it.a, start), b = Math.min(it.b, limit);
     blocks.push({ a, b, c: it.c });
+    covered += b - a;
     if (it.c === "on") onMs += b - a;
+    else if (it.c === "unav") unavMs += b - a;
   }
-  return { blocks, onMs };
+  // Time with no recorded history at all (before the first record) counts as unavailable
+  unavMs += Math.max(0, (limit - start) - covered);
+  return { blocks, onMs, unavMs };
+}
+
+/**
+ * Duty cycle = on-time / considered time.
+ *  elapsed   : time of the day elapsed so far (full window for past days)   [default]
+ *  window    : full day window, also for the current day (grows during the day)
+ *  available : elapsed time minus unavailable / unrecorded time
+ * Returns null when the considered time is 0.
+ */
+function dutyCycle(onMs, elapsedMs, spanMs, unavMs, basis) {
+  const base = basis === "window" ? spanMs : basis === "available" ? elapsedMs - unavMs : elapsedMs;
+  return base > 0 ? { pct: (onMs / base) * 100, base } : null;
+}
+
+function formatPct(pct, decimals) {
+  const d = Math.min(2, Math.max(0, parseInt(decimals, 10) || 0));
+  return `${Math.min(100, Math.max(0, pct)).toFixed(d)}%`;
 }
 
 function formatDuration(ms, fmt) {
@@ -298,6 +327,9 @@ class StatusTimelineCard extends HTMLElement {
     c.days = Math.min(MAX_DAYS, Math.max(1, parseInt(c.days, 10) || DEFAULTS.days));
     const win = validateWindow(c.day_start, c.day_end, c.partial_day);
     c._startMin = win.startMin; c._endMin = win.endMin; c._lenMin = win.lenMin;
+    if (!DUTY_BASES.includes(c.duty_cycle_basis))
+      throw new Error(`Invalid duty_cycle_basis "${c.duty_cycle_basis}". Use one of: ${DUTY_BASES.join(", ")}.`);
+    c.duty_cycle_decimals = Math.min(2, Math.max(0, parseInt(c.duty_cycle_decimals, 10) || 0));
     c.refresh_interval = Math.max(30, Number(c.refresh_interval) || DEFAULTS.refresh_interval);
     const autoH = c._entities.length === 1 ? 18 : 14;
     c.row_height = Math.min(48, Math.max(8, Number(c.row_height) || autoH));
@@ -366,7 +398,6 @@ class StatusTimelineCard extends HTMLElement {
     const mode = this._config.state_display;
     if (mode === "raw") return raw;
     if (mode === "mapped_only") return this._t(e.cur === "unav" ? "unavailable" : e.cur);
-    // "mapped" (default): raw text unless the mapping changed its meaning
     return isRemapped(e.st.state, e.ec) ? this._t(e.cur === "unav" ? "unavailable" : e.cur) : raw;
   }
 
@@ -460,12 +491,13 @@ class StatusTimelineCard extends HTMLElement {
     const lang = hass.locale?.language || hass.language || "en";
     const dateFmt = new Intl.DateTimeFormat(lang, { weekday: "short", day: "2-digit", month: "2-digit", timeZone: "UTC" });
     const multi = ents.length > 1;
+    const basisTxt = this._t(`basis_${c.duty_cycle_basis}`);
 
     for (const e of ents) {
       e.name = e.ec.name || e.st?.attributes?.friendly_name || e.ec.entity;
       e.intervals = this._history && e.st ? buildIntervals(this._changes(e.ec.entity), now, e.ec) : [];
       e.cur = e.st ? classify(e.st.state, e.ec) : "unav";
-      e.totalOn = 0; e.totalElapsed = 0; e.days = 0;
+      e.totalOn = 0; e.totalBase = 0; e.days = 0;
     }
 
     // Hour axis
@@ -496,7 +528,7 @@ class StatusTimelineCard extends HTMLElement {
 
     // Day groups
     const daysHtml = rows.map((r) => {
-      const span = startMin !== undefined ? (r.end - r.start) : 1;
+      const span = r.end - r.start;
       const elapsed = Math.max(0, Math.min(r.end, now) - r.start);
       let futureHtml = "", nowHtml = "";
       if (now < r.end) {
@@ -506,8 +538,12 @@ class StatusTimelineCard extends HTMLElement {
       }
 
       const bars = ents.map((e, i) => {
-        const { blocks, onMs } = clipToWindow(e.intervals, r.start, r.end, now);
-        if (elapsed > 0 && e.st) { e.totalOn += onMs; e.totalElapsed += elapsed; e.days++; }
+        const { blocks, onMs, unavMs } = clipToWindow(e.intervals, r.start, r.end, now);
+        const dc = dutyCycle(onMs, elapsed, span, unavMs, c.duty_cycle_basis);
+        if (elapsed > 0 && e.st) {
+          e.totalOn += onMs; e.days++;
+          if (dc) e.totalBase += dc.base;
+        }
         const blocksHtml = blocks
           .filter((b) => b.c === "on" || (b.c === "unav" && c.show_unavailable))
           .map((b) => {
@@ -518,10 +554,14 @@ class StatusTimelineCard extends HTMLElement {
             const showV = c.show_block_values && b.c === "on" && (b.b - b.a) >= Number(c.block_value_min_ms || 0);
             return `<div class="blk ${b.c}" style="left:${left.toFixed(3)}%;width:${Math.max(width, 0.15).toFixed(3)}%" title="${esc(tip)}">${showV ? `<span class="v">${esc(dur)}</span>` : ""}</div>`;
           }).join("");
-        const pct = span > 0 ? Math.round((onMs / span) * 100) : 0;
+
+        const dcTxt = dc && elapsed > 0 ? formatPct(dc.pct, c.duty_cycle_decimals) : "–";
+        const dcTip = dc ? `${e.name} · ${this._t("duty")}: ${formatDuration(onMs, "hm")} / ${formatDuration(dc.base, "hm")} ${basisTxt}` : "";
         const totalHtml = c.show_total
-          ? `<div class="total" data-r="${i + 1}" style="--c:${e.ec.color}" title="${esc(e.name)} · ${pct}%">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
-        return `<div class="track" style="--c:${e.ec.color};grid-row:${i + 1}">${gridHtml}${blocksHtml}${futureHtml}${nowHtml}</div>${totalHtml}`;
+          ? `<div class="total" data-r="${i + 1}" style="--c:${e.ec.color}" title="${esc(dcTip)}">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
+        const dutyHtml = c.show_duty_cycle
+          ? `<div class="duty" data-r="${i + 1}" style="--c:${e.ec.color};--p:${dc ? Math.min(100, dc.pct).toFixed(1) : 0}%" title="${esc(dcTip)}">${esc(dcTxt)}</div>` : "";
+        return `<div class="track" style="--c:${e.ec.color};grid-row:${i + 1}">${gridHtml}${blocksHtml}${futureHtml}${nowHtml}</div>${totalHtml}${dutyHtml}`;
       }).join("");
 
       return `<div class="day${r.current ? " current" : ""}" style="--n:${ents.length}">
@@ -531,7 +571,7 @@ class StatusTimelineCard extends HTMLElement {
 
     const axisHtml = c.show_hours ? `<div class="axis"><div></div><div class="ticks">${
       ticks.map((t) => `<span style="left:${t.pct.toFixed(3)}%">${t.label}</span>`).join("")
-    }</div>${c.show_total ? "<div></div>" : ""}</div>` : "";
+    }</div>${c.show_total ? "<div></div>" : ""}${c.show_duty_cycle ? "<div></div>" : ""}</div>` : "";
 
     let status = "";
     if (!this._history && !this._error) status = `<div class="status">${esc(this._t("loading"))}</div>`;
@@ -541,11 +581,12 @@ class StatusTimelineCard extends HTMLElement {
         <div class="srow" style="--c:${e.ec.color}"><span class="dot"></span>${multi ? `<span class="nm">${esc(e.name)}</span>` : ""}
         ${esc(this._t("total"))} (${e.days} ${esc(this._t("days"))}): <b>${esc(formatDuration(e.totalOn, c.total_format))}</b>
         · ${esc(this._t("avg"))}: <b>${esc(formatDuration(e.totalOn / e.days, c.total_format))}</b>
-        · ${e.totalElapsed > 0 ? Math.round((e.totalOn / e.totalElapsed) * 100) : 0}%</div>`).join("")}</div>` : "";
+        · <span title="${esc(this._t("duty"))} ${esc(basisTxt)}">${e.totalBase > 0 ? esc(formatPct((e.totalOn / e.totalBase) * 100, c.duty_cycle_decimals)) : "–"}</span></div>`).join("")}</div>` : "";
 
     const offColor = c.off_color || "var(--secondary-background-color, rgba(127,127,127,.15))";
     const unColor = c.unavailable_color || "var(--disabled-text-color, #9e9e9e)";
-    const cols = `78px 1fr${c.show_total ? " 64px" : ""}`;
+    const dutyW = 38 + 7 * c.duty_cycle_decimals;
+    const cols = `78px 1fr${c.show_total ? " 64px" : ""}${c.show_duty_cycle ? ` ${dutyW}px` : ""}`;
 
     root.innerHTML = `
       <style>
@@ -583,6 +624,10 @@ class StatusTimelineCard extends HTMLElement {
         .now { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background: var(--error-color, #db4437); }
         .total { grid-column:3; font-size:12px; text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap;
                  color: var(--primary-text-color); border-right: 3px solid var(--c); padding-right:5px; line-height: var(--stc-h); }
+        .duty { grid-column:-2 / -1; position:relative; font-size:11px; text-align:right; font-variant-numeric: tabular-nums;
+                white-space:nowrap; color: var(--secondary-text-color); line-height: var(--stc-h); padding-right:2px; }
+        .duty::after { content:""; position:absolute; left:0; bottom:1px; height:2px; width:var(--p); max-width:100%;
+                       background: var(--c); opacity:.55; border-radius:1px; }
         .axis { display:grid; grid-template-columns:${cols}; column-gap:8px; }
         .ticks { position:relative; height:14px; font-size:10px; color: var(--secondary-text-color); }
         .ticks span { position:absolute; transform:translateX(-50%); }
@@ -601,7 +646,7 @@ class StatusTimelineCard extends HTMLElement {
         ${summaryHtml}
       </ha-card>`;
 
-    for (const t of root.querySelectorAll(".total[data-r]")) t.style.gridRow = t.dataset.r;
+    for (const t of root.querySelectorAll("[data-r]")) t.style.gridRow = t.dataset.r;
     for (const si of root.querySelectorAll("ha-state-icon")) {
       const e = ents[+si.dataset.i];
       si.hass = hass; si.stateObj = e.st;
@@ -688,19 +733,29 @@ const EDITOR_SCHEMA = [
     { name: "include_today", selector: { boolean: {} } },
   ] },
   { type: "grid", name: "", flatten: true, schema: [
+    { name: "show_total", selector: { boolean: {} } },
+    { name: "total_format", selector: { select: { mode: "dropdown", options: [
+      { value: "hm", label: "5h 07m" }, { value: "decimal", label: "5.12 h" }] } } },
+  ] },
+  { type: "grid", name: "", flatten: true, schema: [
+    { name: "show_duty_cycle", selector: { boolean: {} } },
+    { name: "duty_cycle_basis", selector: { select: { mode: "dropdown", options: [
+      { value: "elapsed", label: "Elapsed time (current day so far)" },
+      { value: "window", label: "Full day window" },
+      { value: "available", label: "Available time (excl. unavailable)" }] } } },
+    { name: "duty_cycle_decimals", selector: { number: { min: 0, max: 2, step: 1, mode: "box" } } },
+  ] },
+  { type: "grid", name: "", flatten: true, schema: [
     { name: "show_state", selector: { boolean: {} } },
     { name: "state_display", selector: { select: { mode: "dropdown", options: [
       { value: "mapped", label: "Mapped (raw unless remapped)" },
       { value: "mapped_only", label: "Always On / Off" },
       { value: "raw", label: "Raw HA state" }] } } },
-    { name: "show_total", selector: { boolean: {} } },
     { name: "show_block_values", selector: { boolean: {} } },
     { name: "show_summary", selector: { boolean: {} } },
     { name: "show_hours", selector: { boolean: {} } },
     { name: "show_now", selector: { boolean: {} } },
     { name: "show_unavailable", selector: { boolean: {} } },
-    { name: "total_format", selector: { select: { mode: "dropdown", options: [
-      { value: "hm", label: "5h 07m" }, { value: "decimal", label: "5.12 h" }] } } },
   ] },
   { name: "order", selector: { select: { mode: "dropdown", options: [
     { value: "newest_first", label: "Newest first" }, { value: "oldest_first", label: "Oldest first" }] } } },
@@ -727,9 +782,12 @@ const LABELS = {
   partial_day: "Partial day (end later than start, same day)", days: "Days (1–10)",
   include_today: "Include current day", order: "Order", show_state: "Show current state",
   state_display: "Current state text",
-  show_total: "Total on-time (right)", show_block_values: "Duration inside bars (if it fits)",
+  show_total: "Total on-time (right)", total_format: "Total format",
+  show_duty_cycle: "Duty cycle % (right of total)", duty_cycle_basis: "Duty cycle basis",
+  duty_cycle_decimals: "Duty cycle decimals (0–2)",
+  show_block_values: "Duration inside bars (if it fits)",
   show_summary: "Summary footer", show_hours: "Hour axis", show_now: "'Now' marker",
-  show_unavailable: "Hatch unavailable", total_format: "Total format",
+  show_unavailable: "Hatch unavailable",
   on_states: "States = ON", off_states: "States mapped to OFF", on_above: "Numeric: ON above",
   invert: "Invert (count OFF)", off_color: "OFF bar color", unavailable_color: "Unavailable color",
   row_height: "Bar height px (0 = auto)", hour_step: "Hour step (0 = auto)",
@@ -779,7 +837,7 @@ class StatusTimelineCardEditor extends HTMLElement {
 
 StatusTimelineCard._helpers = {
   parseTime, validateWindow, computeRows, classify, isRemapped, buildIntervals, clipToWindow,
-  formatDuration, normalizeEntities, toFormData, fromFormData,
+  dutyCycle, formatPct, formatDuration, normalizeEntities, toFormData, fromFormData,
 };
 
 if (!customElements.get(CARD_TAG)) {
@@ -789,9 +847,9 @@ if (!customElements.get(CARD_TAG)) {
   window.customCards.push({
     type: CARD_TAG,
     name: "Status Timeline Card",
-    description: "Daily on/off timelines for up to 3 entities with configurable day start/end and total on-time.",
+    description: "Daily on/off timelines for up to 3 entities with configurable day start/end, total on-time and duty cycle.",
     preview: true,
-    documentationURL: "https://github.com/YOUR_USER/status-timeline-card",
+    documentationURL: "https://github.com/Gaudi111/status-timeline-card",
   });
   console.info(`%c STATUS-TIMELINE-CARD %c ${CARD_VERSION} `,
     "color:white;background:#03a9f4;font-weight:700", "color:#03a9f4;background:white;font-weight:700");
