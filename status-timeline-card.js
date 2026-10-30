@@ -4,11 +4,13 @@
  * logical day (e.g. 04:00 -> 04:00), up to 10 days, total on-time per bar,
  * per-entity colors, OFF-state mapping and in-bar duration labels.
  *
+ * Versioning: YEAR.MONTH.SUBVERSION  (see CHANGELOG.md)
+ *
  * Inspired by / derived from schedule-timeline-card by andregoncalvespires
  * https://github.com/andregoncalvespires/schedule-timeline-card
  */
 
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "2026.10.3";
 const CARD_TAG = "status-timeline-card";
 const EDITOR_TAG = "status-timeline-card-editor";
 const DAY_MS = 86400000;
@@ -23,6 +25,7 @@ const DEFAULTS = {
   include_today: true,
   day_start: "00:00",
   day_end: "00:00",
+  partial_day: false,
   order: "newest_first",
   on_states: DEFAULT_ON_STATES,
   off_states: [],
@@ -35,6 +38,7 @@ const DEFAULTS = {
   show_now: true,
   show_unavailable: true,
   show_state: true,
+  state_display: "mapped",
   show_block_values: true,
   block_value_min_ms: 0,
   hour_step: 0,
@@ -108,17 +112,44 @@ function parseTime(v) {
   return (h * 60 + mi) % 1440;
 }
 
+function fmtMin(min) {
+  return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Validates the logical-day window. Returns { startMin, endMin, lenMin }.
+ *  - day_end == day_start            -> full 24 h day
+ *  - day_end <  day_start            -> ends on the following calendar day (< 24 h)
+ *  - day_end >  day_start            -> only allowed with partial_day: true (same-day window).
+ *    Otherwise the window would be read as ending the next day, exceeding 24 h and
+ *    overlapping the following day's start -> the same records would be counted twice.
+ */
+function validateWindow(dayStart, dayEnd, partialDay) {
+  const startMin = parseTime(dayStart);
+  const endMin = parseTime(dayEnd);
+  if (isNaN(startMin)) throw new Error(`Invalid day_start "${dayStart}". Use HH:MM (e.g. "04:00").`);
+  if (isNaN(endMin)) throw new Error(`Invalid day_end "${dayEnd}". Use HH:MM (e.g. "04:00").`);
+  if (endMin > startMin && !partialDay) {
+    throw new Error(
+      `day_end (${fmtMin(endMin)}) is later than day_start (${fmtMin(startMin)}): the day would overlap ` +
+      `the next day's start by ${fmtMin(endMin - startMin)} h and duplicate records. ` +
+      `Set day_end ≤ day_start (e.g. day_end: "${fmtMin(startMin)}"), ` +
+      `or set partial_day: true to display only ${fmtMin(startMin)}–${fmtMin(endMin)} of each day.`);
+  }
+  let lenMin = endMin - startMin;
+  if (lenMin <= 0) lenMin += 1440;
+  return { startMin, endMin, lenMin };
+}
+
 function toList(v, fallback) {
   if (v === null || v === undefined) return fallback;
   if (typeof v === "string") v = v.split(",");
   if (!Array.isArray(v)) return fallback;
-  return v.map((x) => String(x).trim().toLowerCase()).filter((x) => x.length || v.length === 0);
+  return v.map((x) => String(x).trim().toLowerCase()).filter((x) => x.length);
 }
 
 function computeRows(now, tz, cfg) {
-  const startMin = cfg._startMin, endMin = cfg._endMin;
-  let lenMin = endMin - startMin;
-  if (lenMin <= 0) lenMin += 1440;
+  const startMin = cfg._startMin, lenMin = cfg._lenMin;
   const w = wallParts(now, tz);
   let base = Date.UTC(w.y, w.m, w.d);
   if (w.h * 60 + w.mi < startMin) base -= DAY_MS;
@@ -128,10 +159,13 @@ function computeRows(now, tz, cfg) {
     const k = i + offset;
     const dd = new Date(base - k * DAY_MS);
     const y = dd.getUTCFullYear(), m = dd.getUTCMonth(), d = dd.getUTCDate();
+    const nx = new Date(base - (k - 1) * DAY_MS);
+    const nextStart = zonedToEpoch(nx.getUTCFullYear(), nx.getUTCMonth(), nx.getUTCDate(), startMin, tz);
     rows.push({
       dateUtc: Date.UTC(y, m, d),
       start: zonedToEpoch(y, m, d, startMin, tz),
-      end: zonedToEpoch(y, m, d, startMin + lenMin, tz),
+      // Safety net: a row never extends past the next day's start (no double counting, DST-safe)
+      end: Math.min(zonedToEpoch(y, m, d, startMin + lenMin, tz), nextStart),
       current: k === 0,
     });
   }
@@ -156,6 +190,12 @@ function classify(state, ec) {
   else on = ec._onStates.includes(s);
   if (ec.invert) on = !on;
   return on ? "on" : "off";
+}
+
+/** True when the raw state was re-interpreted by the mapping (so raw text would be misleading). */
+function isRemapped(state, ec) {
+  const s = String(state ?? "").trim().toLowerCase();
+  return ec._offStates.includes(s) || !!ec.invert;
 }
 
 function buildIntervals(changes, now, ec) {
@@ -256,10 +296,8 @@ class StatusTimelineCard extends HTMLElement {
     if (Array.isArray(config.entities) && config.entities.length > MAX_ENTITIES)
       console.warn(`${CARD_TAG}: only the first ${MAX_ENTITIES} entities are shown`);
     c.days = Math.min(MAX_DAYS, Math.max(1, parseInt(c.days, 10) || DEFAULTS.days));
-    c._startMin = parseTime(c.day_start);
-    c._endMin = parseTime(c.day_end);
-    if (isNaN(c._startMin)) throw new Error(`Invalid day_start: ${c.day_start}`);
-    if (isNaN(c._endMin)) throw new Error(`Invalid day_end: ${c.day_end}`);
+    const win = validateWindow(c.day_start, c.day_end, c.partial_day);
+    c._startMin = win.startMin; c._endMin = win.endMin; c._lenMin = win.lenMin;
     c.refresh_interval = Math.max(30, Number(c.refresh_interval) || DEFAULTS.refresh_interval);
     const autoH = c._entities.length === 1 ? 18 : 14;
     c.row_height = Math.min(48, Math.max(8, Number(c.row_height) || autoH));
@@ -319,6 +357,17 @@ class StatusTimelineCard extends HTMLElement {
   _t(key) {
     const lang = (this._hass?.locale?.language || this._hass?.language || "en").slice(0, 2);
     return (I18N[lang] || I18N.en)[key] ?? I18N.en[key];
+  }
+
+  /** Text for the current-state badge, honoring the configured mapping. */
+  _stateText(e) {
+    const hass = this._hass;
+    const raw = hass.formatEntityState ? hass.formatEntityState(e.st) : e.st.state;
+    const mode = this._config.state_display;
+    if (mode === "raw") return raw;
+    if (mode === "mapped_only") return this._t(e.cur === "unav" ? "unavailable" : e.cur);
+    // "mapped" (default): raw text unless the mapping changed its meaning
+    return isRemapped(e.st.state, e.ec) ? this._t(e.cur === "unav" ? "unavailable" : e.cur) : raw;
   }
 
   _maybeFetch() {
@@ -431,15 +480,15 @@ class StatusTimelineCard extends HTMLElement {
     }
     const gridHtml = ticks.map((t) => `<div class="gl" style="left:${t.pct.toFixed(3)}%"></div>`).join("");
 
-    // Header: current state per entity with its color reference
+    // Header: current state per entity, mapped through on/off configuration, with its color reference
     const headerHtml = c.show_state ? `<div class="states">${ents.map((e, i) => {
       if (!e.st) return `<div class="chip missing" style="--c:${e.ec.color}"><span class="dot"></span>${esc(this._t("not_found"))}: ${esc(e.ec.entity)}</div>`;
       const icon = e.ec.icon || e.st.attributes.icon || "";
-      const txt = hass.formatEntityState ? hass.formatEntityState(e.st) : e.st.state;
-      return `<div class="chip ${e.cur}" data-i="${i}" style="--c:${e.ec.color}" title="${esc(e.ec.entity)}">
+      const tip = `${e.ec.entity} · ${e.st.state}`;
+      return `<div class="chip ${e.cur}" data-i="${i}" style="--c:${e.ec.color}" title="${esc(tip)}">
           <span class="ico">${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : `<ha-state-icon data-i="${i}"></ha-state-icon>`}</span>
           <span class="nm">${esc(e.name)}</span>
-          <span class="badge">${esc(txt)}</span>
+          <span class="badge">${esc(this._stateText(e))}</span>
         </div>`;
     }).join("")}</div>` : "";
 
@@ -447,7 +496,7 @@ class StatusTimelineCard extends HTMLElement {
 
     // Day groups
     const daysHtml = rows.map((r) => {
-      const span = r.end - r.start;
+      const span = startMin !== undefined ? (r.end - r.start) : 1;
       const elapsed = Math.max(0, Math.min(r.end, now) - r.start);
       let futureHtml = "", nowHtml = "";
       if (now < r.end) {
@@ -471,8 +520,8 @@ class StatusTimelineCard extends HTMLElement {
           }).join("");
         const pct = span > 0 ? Math.round((onMs / span) * 100) : 0;
         const totalHtml = c.show_total
-          ? `<div class="total" style="--c:${e.ec.color}" title="${esc(e.name)} · ${pct}%">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
-        return `<div class="track" style="--c:${e.ec.color};grid-row:${i + 1}">${gridHtml}${blocksHtml}${futureHtml}${nowHtml}</div>${totalHtml.replace('class="total"', `class="total" data-r="${i + 1}"`)}`;
+          ? `<div class="total" data-r="${i + 1}" style="--c:${e.ec.color}" title="${esc(e.name)} · ${pct}%">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
+        return `<div class="track" style="--c:${e.ec.color};grid-row:${i + 1}">${gridHtml}${blocksHtml}${futureHtml}${nowHtml}</div>${totalHtml}`;
       }).join("");
 
       return `<div class="day${r.current ? " current" : ""}" style="--n:${ents.length}">
@@ -552,7 +601,6 @@ class StatusTimelineCard extends HTMLElement {
         ${summaryHtml}
       </ha-card>`;
 
-    // place totals on the same grid row as their bar
     for (const t of root.querySelectorAll(".total[data-r]")) t.style.gridRow = t.dataset.r;
     for (const si of root.querySelectorAll("ha-state-icon")) {
       const e = ents[+si.dataset.i];
@@ -569,7 +617,7 @@ class StatusTimelineCard extends HTMLElement {
 }
 
 /* ------------------------------------------------------------------ */
-/* Visual editor (ha-form, flattens the entities list into 3 sections) */
+/* Visual editor                                                       */
 /* ------------------------------------------------------------------ */
 
 const E_FIELDS = ["entity", "name", "color", "icon", "on_states", "off_states", "on_above", "invert"];
@@ -635,11 +683,16 @@ const EDITOR_SCHEMA = [
   { type: "grid", name: "", flatten: true, schema: [
     { name: "day_start", selector: { time: {} } },
     { name: "day_end", selector: { time: {} } },
+    { name: "partial_day", selector: { boolean: {} } },
     { name: "days", selector: { number: { min: 1, max: MAX_DAYS, step: 1, mode: "slider" } } },
     { name: "include_today", selector: { boolean: {} } },
   ] },
   { type: "grid", name: "", flatten: true, schema: [
     { name: "show_state", selector: { boolean: {} } },
+    { name: "state_display", selector: { select: { mode: "dropdown", options: [
+      { value: "mapped", label: "Mapped (raw unless remapped)" },
+      { value: "mapped_only", label: "Always On / Off" },
+      { value: "raw", label: "Raw HA state" }] } } },
     { name: "show_total", selector: { boolean: {} } },
     { name: "show_block_values", selector: { boolean: {} } },
     { name: "show_summary", selector: { boolean: {} } },
@@ -670,8 +723,10 @@ const EDITOR_SCHEMA = [
 ];
 
 const LABELS = {
-  title: "Title", day_start: "Day start", day_end: "Day end", days: "Days (1–10)",
+  title: "Title", day_start: "Day start", day_end: "Day end (≤ start = next day)",
+  partial_day: "Partial day (end later than start, same day)", days: "Days (1–10)",
   include_today: "Include current day", order: "Order", show_state: "Show current state",
+  state_display: "Current state text",
   show_total: "Total on-time (right)", show_block_values: "Duration inside bars (if it fits)",
   show_summary: "Summary footer", show_hours: "Hour axis", show_now: "'Now' marker",
   show_unavailable: "Hatch unavailable", total_format: "Total format",
@@ -689,12 +744,17 @@ class StatusTimelineCardEditor extends HTMLElement {
   _render() {
     if (!this._config || !this._hass) return;
     if (!this._form) {
+      this._warn = document.createElement("ha-alert");
+      this._warn.setAttribute("alert-type", "error");
+      this._warn.style.cssText = "display:none;margin-bottom:8px";
+      this.appendChild(this._warn);
       this._form = document.createElement("ha-form");
       this._form.computeLabel = (s) => LABELS[s.name.replace(/^e\d_/, "")] ?? s.name;
       this._form.addEventListener("value-changed", (ev) => {
         ev.stopPropagation();
         const cfg = fromFormData(ev.detail.value);
         this._config = cfg;
+        this._validate();
         this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: cfg }, bubbles: true, composed: true }));
       });
       this.appendChild(this._form);
@@ -702,10 +762,25 @@ class StatusTimelineCardEditor extends HTMLElement {
     this._form.hass = this._hass;
     this._form.schema = EDITOR_SCHEMA;
     this._form.data = { ...DEFAULTS, ...toFormData(this._config) };
+    this._validate();
+  }
+
+  _validate() {
+    if (!this._warn) return;
+    try {
+      validateWindow(this._config.day_start ?? DEFAULTS.day_start, this._config.day_end ?? DEFAULTS.day_end, this._config.partial_day);
+      this._warn.style.display = "none";
+    } catch (e) {
+      this._warn.textContent = e.message;
+      this._warn.style.display = "block";
+    }
   }
 }
 
-StatusTimelineCard._helpers = { parseTime, computeRows, classify, buildIntervals, clipToWindow, formatDuration, normalizeEntities, toFormData, fromFormData };
+StatusTimelineCard._helpers = {
+  parseTime, validateWindow, computeRows, classify, isRemapped, buildIntervals, clipToWindow,
+  formatDuration, normalizeEntities, toFormData, fromFormData,
+};
 
 if (!customElements.get(CARD_TAG)) {
   customElements.define(CARD_TAG, StatusTimelineCard);
@@ -718,6 +793,6 @@ if (!customElements.get(CARD_TAG)) {
     preview: true,
     documentationURL: "https://github.com/YOUR_USER/status-timeline-card",
   });
-  console.info(`%c STATUS-TIMELINE-CARD %c v${CARD_VERSION} `,
+  console.info(`%c STATUS-TIMELINE-CARD %c ${CARD_VERSION} `,
     "color:white;background:#03a9f4;font-weight:700", "color:#03a9f4;background:white;font-weight:700");
 }
