@@ -1,83 +1,91 @@
 # Status Timeline Card
 
-A Lovelace card that shows the **on/off history of any entity** (binary_sensor, switch, light, input_boolean, climate, numeric sensor with threshold…) as **one horizontal bar per day**, with the **total on-time on the right**.
+Lovelace card showing the **on/off history of up to 3 entities** as **grouped horizontal bars per day**, with the **total on-time on the right** of each bar.
 
-Based on the idea and layout of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read **recorded history** instead of `schedule.*` configuration.
+Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read recorded history.
 
 ## Features
-- **Configurable logical day**: `day_start` / `day_end` (e.g. 04:00 → 04:00). Activity between 00:00 and 03:59 is counted in the *previous* day.
-- Windows crossing midnight (e.g. 06:00 → 02:00) and partial windows (e.g. 08:00 → 20:00).
-- **1 to 10 days**, current day first (or `oldest_first`), optionally excluding the current day.
-- Total on-time per day (`5h 07m` or `5.12 h`), plus summary footer (total, daily average, % on).
-- Hour axis, “now” marker, unavailable periods hatched, tooltips with start → end (duration).
-- Numeric sensors: `on_above` threshold (e.g. power > 10 W = on). `invert` to count OFF time.
-- Time zone aware (follows HA user profile setting: server or browser time zone), DST safe.
-- Visual editor (native HA form), theme colors, ES / EN / PT texts.
+- **Up to 3 entities** per card, shown as clustered bars for each day, each with its **own color**.
+- **Current state header**: one chip per entity, outlined in its configured color, with the current state.
+- **OFF mapping** (`off_states`): e.g. treat `unavailable` / `unknown` as OFF instead of hatched gaps.
+- **Duration inside each ON block**, shown only when it fits (re-evaluated on resize).
+- **Configurable logical day**: `day_start` / `day_end` (e.g. 04:00 → 04:00), midnight-crossing and partial windows.
+- **1 to 10 days**, newest or oldest first, optionally excluding the current day.
+- Total per bar (`5h 07m` or `5.12 h`), summary footer per entity (total, average, %).
+- Hour axis, "now" marker, tooltips, numeric thresholds (`on_above`), `invert`.
+- Time zone and DST aware. Visual editor. ES / EN / PT.
 
 ## Installation
-### HACS (custom repository)
-1. HACS → ⋮ → **Custom repositories** → add this repo URL, category **Dashboard**.
-2. Install **Status Timeline Card**, then reload the browser (Ctrl+F5).
-
-### Manual
-1. Copy `status-timeline-card.js` to `/config/www/`.
-2. Settings → Dashboards → ⋮ → Resources → add `/local/status-timeline-card.js` (JavaScript module).
+**HACS**: ⋮ → Custom repositories → this repo, category **Dashboard** → install → Ctrl+F5.
+**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js` as a JavaScript module resource.
 
 ## Usage
 ```yaml
 type: custom:status-timeline-card
-entity: binary_sensor.water_pump
-name: Water pump
+title: Water system
 day_start: "04:00"
 day_end: "04:00"
 days: 7
-show_total: true
+off_states: [unavailable, unknown]      # default for all entities
+entities:
+  - entity: binary_sensor.water_pump
+    name: Pump
+    color: "#2196f3"
+  - entity: switch.pressure_booster
+    name: Booster
+    color: "#ff9800"
+  - entity: sensor.heater_power
+    name: Heater
+    color: "#e91e63"
+    on_above: 10                        # W
+    off_states: []                      # keep unavailable hatched for this one
 ```
-
-Power sensor as on/off, partial window, oldest first:
-```yaml
-type: custom:status-timeline-card
-entity: sensor.heater_power
-on_above: 10
-day_start: "06:00"
-day_end: "02:00"
-days: 10
-order: oldest_first
-total_format: decimal
-on_color: "#ff9800"
-```
+The v1.0 single-entity form (`entity: binary_sensor.x`) still works.
 
 ## Options
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `entity` | string | **required** | Any entity with history. |
-| `name` / `icon` | string | entity | Header overrides. |
-| `day_start` | time | `00:00` | Start of the logical day. |
-| `day_end` | time | `00:00` | End of the logical day. If `≤ day_start`, it ends the next calendar day. Equal = 24 h. |
-| `days` | number | `7` | Rows to display (1–10). |
-| `include_today` | bool | `true` | `false` = show only completed previous days. |
-| `order` | string | `newest_first` | or `oldest_first`. |
-| `on_states` | list | on, open, home, playing, heat, cool, heating, cooling, active, detected, true | States counted as ON (case-insensitive). |
-| `on_above` | number | – | Numeric sensors: ON when value > threshold (overrides `on_states`). |
-| `invert` | bool | `false` | Count OFF time instead. |
-| `show_total` | bool | `true` | Total on-time column on the right (hover = % of day). |
-| `total_format` | string | `hm` | `hm` (5h 07m) or `decimal` (5.12 h). |
-| `show_summary` | bool | `true` | Footer with total, average and %. |
-| `show_hours` / `show_now` / `show_unavailable` | bool | `true` | Axis, now marker, hatched unavailable periods. |
-| `hour_step` | number | `0` (auto) | Hours between axis labels. |
-| `row_height` | number | `18` | Bar height in px. |
-| `refresh_interval` | number | `300` | Seconds between history reloads (state changes are drawn live). |
-| `time_zone` | string | `auto` | `auto` (user profile), `server`, `local`. |
-| `on_color` / `off_color` / `unavailable_color` | CSS color | theme | Color overrides. |
+### Card
+| Option | Default | Description |
+|---|---|---|
+| `entities` | – | List (max 3) of entity IDs or objects (see below). |
+| `entity` | – | Single entity (backward compatible). |
+| `title` | – | Optional card title. |
+| `day_start` / `day_end` | `00:00` | Logical day window. `day_end ≤ day_start` ends next day; equal = 24 h. |
+| `days` | `7` | 1–10. |
+| `include_today` | `true` | `false` = completed days only. |
+| `order` | `newest_first` | or `oldest_first`. |
+| `show_state` | `true` | Current-state chips with color reference. |
+| `show_total` | `true` | Total on-time right of each bar (hover = %). |
+| `total_format` | `hm` | `hm` or `decimal`. |
+| `show_block_values` | `true` | Duration inside ON blocks when it fits. |
+| `block_value_min_ms` | `0` | Only label blocks at least this long. |
+| `show_summary` / `show_hours` / `show_now` / `show_unavailable` | `true` | Footer, axis, now marker, hatched unavailable. |
+| `on_states` | on, open, home, … | Default ON states. |
+| `off_states` | `[]` | Default states forced to OFF (checked first). |
+| `on_above` / `invert` | – / `false` | Default numeric threshold / count OFF time. |
+| `row_height` | `0` (auto: 18 single, 14 grouped) | Bar height in px. Labels need ≥ 12. |
+| `hour_step` | `0` (auto) | Hours between axis labels. |
+| `refresh_interval` | `300` | History reload seconds. |
+| `time_zone` | `auto` | `auto`, `server`, `local`. |
+| `off_color` / `unavailable_color` | theme | Bar background / hatch color. |
+
+### Per entity
+| Option | Description |
+|---|---|
+| `entity` | Required. |
+| `name` / `icon` | Overrides. |
+| `color` | CSS color (`"#2196f3"`, `red`, `var(--accent-color)`) or `[r, g, b]`. Defaults: blue, orange, green. |
+| `on_states`, `off_states`, `on_above`, `invert` | Override the card defaults. |
+
+### State classification order
+1. In `off_states` → **OFF**
+2. `unavailable` / `unknown` → **unavailable** (hatched, not counted)
+3. `on_above` (numeric) → ON if value > threshold
+4. `on_states` → ON, anything else OFF
+`invert` swaps ON/OFF.
 
 ## Notes
-- Data comes from the recorder (`history/history_during_period`). The default `purge_keep_days` is **10**; to show 10 *previous* days plus today, set it to at least 11:
-  ```yaml
-  recorder:
-    purge_keep_days: 14
-  ```
-- Excluding the entity from the recorder will leave the bars empty.
-- With `day_start: "04:00"`, at 02:00 on Tuesday the current row is still **Monday** (Mon 04:00 → Tue 04:00).
+- History comes from the recorder; for 10 previous days set `recorder: purge_keep_days: 14`.
+- With `day_start: "04:00"`, at 02:00 Tuesday the current row is still Monday.
 
 ## License
 MIT (keep the attribution to the original project).
