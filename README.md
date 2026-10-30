@@ -100,6 +100,9 @@ Additionally, each row is clamped to the next day's start, so no record is ever 
 4. `on_states` → ON, anything else OFF
 `invert` swaps ON/OFF.
 
+## Screenshots
+![Dashboard Screenshot](images/status-timeline-card-screenshot.png)
+
 ## Notes
 - History comes from the recorder; for 10 previous days set `recorder: purge_keep_days: 14`.
 - With `day_start: "04:00"`, at 02:00 Tuesday the current row is still Monday.
