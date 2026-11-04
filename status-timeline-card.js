@@ -10,7 +10,7 @@
  * https://github.com/andregoncalvespires/schedule-timeline-card
  */
 
-const CARD_VERSION = "2026.10.4";
+const CARD_VERSION = "2026.10.6";
 const CARD_TAG = "status-timeline-card";
 const EDITOR_TAG = "status-timeline-card-editor";
 const DAY_MS = 86400000;
@@ -43,6 +43,7 @@ const DEFAULTS = {
   show_unavailable: true,
   show_state: true,
   state_display: "mapped",
+  show_value: true,
   show_block_values: true,
   block_value_min_ms: 0,
   hour_step: 0,
@@ -57,19 +58,19 @@ const I18N = {
   en: {
     total: "Total", avg: "avg/day", days: "days", loading: "Loading history…",
     error: "Error loading history", not_found: "Entity not found", on: "On", off: "Off",
-    unavailable: "Unavailable", duty: "Duty cycle",
+    unavailable: "Unavailable", duty: "Duty cycle", threshold: "threshold",
     basis_elapsed: "of elapsed time", basis_window: "of full day", basis_available: "of available time",
   },
   es: {
     total: "Total", avg: "prom/día", days: "días", loading: "Cargando historial…",
     error: "Error al cargar el historial", not_found: "Entidad no encontrada", on: "Encendido",
-    off: "Apagado", unavailable: "No disponible", duty: "Ciclo de trabajo",
+    off: "Apagado", unavailable: "No disponible", duty: "Ciclo de trabajo", threshold: "umbral",
     basis_elapsed: "del tiempo transcurrido", basis_window: "del día completo", basis_available: "del tiempo disponible",
   },
   pt: {
     total: "Total", avg: "média/dia", days: "dias", loading: "A carregar histórico…",
     error: "Erro ao carregar histórico", not_found: "Entidade não encontrada", on: "Ligado",
-    off: "Desligado", unavailable: "Indisponível", duty: "Ciclo de trabalho",
+    off: "Desligado", unavailable: "Indisponível", duty: "Ciclo de trabalho", threshold: "limiar",
     basis_elapsed: "do tempo decorrido", basis_window: "do dia completo", basis_available: "do tempo disponível",
   },
 };
@@ -178,6 +179,19 @@ function computeRows(now, tz, cfg) {
   return { rows, startMin, lenMin };
 }
 
+function hasThreshold(ec) {
+  const thr = ec.on_above;
+  return thr !== null && thr !== undefined && thr !== "" && !isNaN(Number(thr));
+}
+
+/** True when the entity uses a numeric threshold AND the given state is numeric. */
+function isNumericRule(state, ec) {
+  if (!hasThreshold(ec)) return false;
+  const s = String(state ?? "").trim().toLowerCase();
+  if (ec._offStates.includes(s)) return false;
+  return s !== "" && !isNaN(parseFloat(s)) && isFinite(Number(s));
+}
+
 /**
  * Classification order:
  *  1. state listed in off_states  -> "off"   (e.g. map "unavailable" to OFF)
@@ -191,8 +205,7 @@ function classify(state, ec) {
   if (ec._offStates.includes(s)) return ec.invert ? "on" : "off";
   if (UNAV_STATES.includes(s)) return "unav";
   let on;
-  const thr = ec.on_above;
-  if (thr !== null && thr !== undefined && thr !== "" && !isNaN(parseFloat(s))) on = parseFloat(s) > Number(thr);
+  if (hasThreshold(ec) && !isNaN(parseFloat(s))) on = parseFloat(s) > Number(ec.on_above);
   else on = ec._onStates.includes(s);
   if (ec.invert) on = !on;
   return on ? "on" : "off";
@@ -287,6 +300,7 @@ function normalizeEntities(c) {
     color: cssColor(e.color, i === 0 && c.on_color ? cssColor(c.on_color) : PALETTE[i]),
     invert: e.invert ?? c.invert,
     on_above: e.on_above ?? c.on_above,
+    show_value: e.show_value ?? c.show_value,
     _onStates: toList(e.on_states ?? c.on_states, DEFAULT_ON_STATES),
     _offStates: toList(e.off_states ?? c.off_states, []),
   }));
@@ -391,14 +405,29 @@ class StatusTimelineCard extends HTMLElement {
     return (I18N[lang] || I18N.en)[key] ?? I18N.en[key];
   }
 
+  _statusText(cls) { return this._t(cls === "unav" ? "unavailable" : cls); }
+
+  /** Formatted current value with unit and the entity's display precision (e.g. "152.3 W"). */
+  _valueText(st) {
+    const hass = this._hass;
+    if (hass.formatEntityState) return hass.formatEntityState(st);
+    const unit = st.attributes?.unit_of_measurement;
+    return unit ? `${st.state} ${unit}` : st.state;
+  }
+
+  /** Threshold formatted with the entity unit (e.g. "10 W"). */
+  _thresholdText(e) {
+    const unit = e.st.attributes?.unit_of_measurement;
+    return `${Number(e.ec.on_above)}${unit ? ` ${unit}` : ""}`;
+  }
+
   /** Text for the current-state badge, honoring the configured mapping. */
   _stateText(e) {
-    const hass = this._hass;
-    const raw = hass.formatEntityState ? hass.formatEntityState(e.st) : e.st.state;
+    const raw = this._valueText(e.st);
     const mode = this._config.state_display;
     if (mode === "raw") return raw;
-    if (mode === "mapped_only") return this._t(e.cur === "unav" ? "unavailable" : e.cur);
-    return isRemapped(e.st.state, e.ec) ? this._t(e.cur === "unav" ? "unavailable" : e.cur) : raw;
+    if (mode === "mapped_only") return this._statusText(e.cur);
+    return isRemapped(e.st.state, e.ec) ? this._statusText(e.cur) : raw;
   }
 
   _maybeFetch() {
@@ -476,6 +505,29 @@ class StatusTimelineCard extends HTMLElement {
     }
   }
 
+  /** Builds one current-state chip. Numeric threshold entities show "value | status". */
+  _chipHtml(e, i) {
+    if (!e.st) return `<div class="chip missing" style="--c:${e.ec.color}"><span class="dot"></span>${esc(this._t("not_found"))}: ${esc(e.ec.entity)}</div>`;
+    const icon = e.ec.icon || e.st.attributes.icon || "";
+    const numeric = isNumericRule(e.st.state, e.ec);
+    let valueHtml = "", badge, tip;
+    if (numeric) {
+      const val = this._valueText(e.st);
+      const cmp = parseFloat(e.st.state) > Number(e.ec.on_above) ? ">" : "≤";
+      badge = this._statusText(e.cur);
+      tip = `${e.ec.entity} · ${val} ${cmp} ${this._thresholdText(e)} (${this._t("threshold")})${e.ec.invert ? " · invert" : ""} → ${badge}`;
+      if (e.ec.show_value !== false) valueHtml = `<span class="val">${esc(val)}</span>`;
+    } else {
+      badge = this._stateText(e);
+      tip = `${e.ec.entity} · ${e.st.state}`;
+    }
+    return `<div class="chip ${e.cur}" data-i="${i}" style="--c:${e.ec.color}" title="${esc(tip)}">
+        <span class="ico">${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : `<ha-state-icon data-i="${i}"></ha-state-icon>`}</span>
+        <span class="nm">${esc(e.name)}</span>
+        ${valueHtml}<span class="badge">${esc(badge)}</span>
+      </div>`;
+  }
+
   _render() {
     if (!this._config) return;
     const c = this._config;
@@ -512,18 +564,7 @@ class StatusTimelineCard extends HTMLElement {
     }
     const gridHtml = ticks.map((t) => `<div class="gl" style="left:${t.pct.toFixed(3)}%"></div>`).join("");
 
-    // Header: current state per entity, mapped through on/off configuration, with its color reference
-    const headerHtml = c.show_state ? `<div class="states">${ents.map((e, i) => {
-      if (!e.st) return `<div class="chip missing" style="--c:${e.ec.color}"><span class="dot"></span>${esc(this._t("not_found"))}: ${esc(e.ec.entity)}</div>`;
-      const icon = e.ec.icon || e.st.attributes.icon || "";
-      const tip = `${e.ec.entity} · ${e.st.state}`;
-      return `<div class="chip ${e.cur}" data-i="${i}" style="--c:${e.ec.color}" title="${esc(tip)}">
-          <span class="ico">${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : `<ha-state-icon data-i="${i}"></ha-state-icon>`}</span>
-          <span class="nm">${esc(e.name)}</span>
-          <span class="badge">${esc(this._stateText(e))}</span>
-        </div>`;
-    }).join("")}</div>` : "";
-
+    const headerHtml = c.show_state ? `<div class="states">${ents.map((e, i) => this._chipHtml(e, i)).join("")}</div>` : "";
     const titleHtml = c.title || (!multi && !c.show_state) ? `<div class="title">${esc(c.title || ents[0].name)}</div>` : "";
 
     // Day groups
@@ -550,7 +591,7 @@ class StatusTimelineCard extends HTMLElement {
             const left = ((b.a - r.start) / span) * 100;
             const width = ((b.b - b.a) / span) * 100;
             const dur = formatDuration(b.b - b.a, "hm");
-            const tip = `${e.name} · ${this._t(b.c === "on" ? "on" : "unavailable")}: ${this._fmtTime(b.a, tz, r.dateUtc)} → ${this._fmtTime(b.b, tz, r.dateUtc)} (${dur})`;
+            const tip = `${e.name} · ${this._statusText(b.c)}: ${this._fmtTime(b.a, tz, r.dateUtc)} → ${this._fmtTime(b.b, tz, r.dateUtc)} (${dur})`;
             const showV = c.show_block_values && b.c === "on" && (b.b - b.a) >= Number(c.block_value_min_ms || 0);
             return `<div class="blk ${b.c}" style="left:${left.toFixed(3)}%;width:${Math.max(width, 0.15).toFixed(3)}%" title="${esc(tip)}">${showV ? `<span class="v">${esc(dur)}</span>` : ""}</div>`;
           }).join("");
@@ -594,18 +635,20 @@ class StatusTimelineCard extends HTMLElement {
         ha-card { padding: 12px 16px 14px; }
         .title { font-size:16px; font-weight:500; margin-bottom:8px; }
         .states { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
-        .chip { display:flex; align-items:center; gap:6px; padding:3px 10px 3px 4px; border-radius:16px; cursor:pointer;
+        .chip { display:flex; align-items:center; gap:6px; padding:3px 4px 3px 4px; border-radius:16px; cursor:pointer;
                 border:1px solid var(--c); background: color-mix(in srgb, var(--c) 8%, transparent); min-width:0; }
         .chip .ico { display:flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%;
-                     background: color-mix(in srgb, var(--c) 18%, transparent); color: var(--c); --mdc-icon-size:18px; }
+                     background: color-mix(in srgb, var(--c) 18%, transparent); color: var(--c); --mdc-icon-size:18px; flex:none; }
         .chip.off .ico { background: var(--stc-off); color: var(--secondary-text-color); }
         .chip.unav .ico { background: repeating-linear-gradient(45deg, var(--stc-un) 0 2px, transparent 2px 5px); color: var(--disabled-text-color); }
-        .chip .nm { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .chip .nm { font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-right:2px; }
+        .chip .val { font-size:12px; font-weight:500; white-space:nowrap; font-variant-numeric: tabular-nums;
+                     color: var(--primary-text-color); padding-left:6px; border-left:1px solid color-mix(in srgb, var(--c) 40%, transparent); }
         .chip .badge { font-size:12px; padding:1px 8px; border-radius:10px; white-space:nowrap;
                        background: var(--stc-off); color: var(--secondary-text-color); }
         .chip.on .badge { background: var(--c); color: #fff; }
         .chip.unav .badge { font-style: italic; }
-        .chip.missing { color: var(--error-color); padding-left:10px; }
+        .chip.missing { color: var(--error-color); padding:3px 10px; }
         .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background: var(--c); flex:none; }
         .day { display:grid; grid-template-columns:${cols}; grid-auto-rows: var(--stc-h); align-items:center;
                column-gap:8px; row-gap:2px; margin:0 0 7px; }
@@ -665,7 +708,7 @@ class StatusTimelineCard extends HTMLElement {
 /* Visual editor                                                       */
 /* ------------------------------------------------------------------ */
 
-const E_FIELDS = ["entity", "name", "color", "icon", "on_states", "off_states", "on_above", "invert"];
+const E_FIELDS = ["entity", "name", "color", "icon", "on_states", "off_states", "on_above", "invert", "show_value"];
 
 function toFormData(cfg) {
   const d = { ...cfg };
@@ -691,8 +734,9 @@ function fromFormData(d) {
     const e = {};
     for (const f of E_FIELDS) {
       const v = d[`e${i}_${f}`];
-      if (v !== undefined && v !== "" && !(Array.isArray(v) && !v.length)) e[f] = v;
+      if (v !== undefined && v !== "" && v !== null && !(Array.isArray(v) && !v.length)) e[f] = v;
     }
+    if (e.show_value === true) delete e.show_value; // default, keep YAML clean
     if (e.entity) ents.push(e);
   }
   const out = { type: cfg.type, entities: ents };
@@ -751,6 +795,7 @@ const EDITOR_SCHEMA = [
       { value: "mapped", label: "Mapped (raw unless remapped)" },
       { value: "mapped_only", label: "Always On / Off" },
       { value: "raw", label: "Raw HA state" }] } } },
+    { name: "show_value", selector: { boolean: {} } },
     { name: "show_block_values", selector: { boolean: {} } },
     { name: "show_summary", selector: { boolean: {} } },
     { name: "show_hours", selector: { boolean: {} } },
@@ -781,7 +826,7 @@ const LABELS = {
   title: "Title", day_start: "Day start", day_end: "Day end (≤ start = next day)",
   partial_day: "Partial day (end later than start, same day)", days: "Days (1–10)",
   include_today: "Include current day", order: "Order", show_state: "Show current state",
-  state_display: "Current state text",
+  state_display: "Current state text", show_value: "Show value for numeric (threshold) entities",
   show_total: "Total on-time (right)", total_format: "Total format",
   show_duty_cycle: "Duty cycle % (right of total)", duty_cycle_basis: "Duty cycle basis",
   duty_cycle_decimals: "Duty cycle decimals (0–2)",
@@ -836,7 +881,7 @@ class StatusTimelineCardEditor extends HTMLElement {
 }
 
 StatusTimelineCard._helpers = {
-  parseTime, validateWindow, computeRows, classify, isRemapped, buildIntervals, clipToWindow,
+  parseTime, validateWindow, computeRows, classify, isRemapped, isNumericRule, buildIntervals, clipToWindow,
   dutyCycle, formatPct, formatDuration, normalizeEntities, toFormData, fromFormData,
 };
 
