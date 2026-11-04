@@ -4,13 +4,14 @@
  * logical day (e.g. 04:00 -> 04:00), up to 10 days, total on-time and duty
  * cycle per bar, per-entity colors, OFF-state mapping and in-bar duration labels.
  *
- * Versioning: YEAR.MONTH.SUBVERSION  (see CHANGELOG.md)
+ * Versioning: YYYY.MM for the first release of a month, YYYY.MM.S for later
+ * releases in the same month (see CHANGELOG.md).
  *
  * Inspired by / derived from schedule-timeline-card by andregoncalvespires
  * https://github.com/andregoncalvespires/schedule-timeline-card
  */
 
-const CARD_VERSION = "2026.10.6";
+const CARD_VERSION = "2026.11";
 const CARD_TAG = "status-timeline-card";
 const EDITOR_TAG = "status-timeline-card-editor";
 const DAY_MS = 86400000;
