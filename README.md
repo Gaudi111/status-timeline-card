@@ -13,10 +13,8 @@ Lovelace card showing the **on/off history of up to 3 entities** as **grouped ho
 Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read recorded history.
 
 
-## What's new in 2026.11
-- **Marketplace / HACS store ready**: install from the Home Assistant Marketplace (2026.11+) or the HACS store, with the button above.
-- **New versioning**: `YYYY.MM` for the first release of a month, `YYYY.MM.S` for later releases in the same month.
-- Screenshots section replaces the mock-up preview.
+## What's new in 2026.11.1
+- **Security hardening**: color options are validated and applied safely (see *Colors* below). Invalid values are ignored and the default color is used.
 - Full history in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
@@ -36,7 +34,7 @@ Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvesp
 
 **Custom repository** (until the card is listed in the store): HACS → ⋮ → Custom repositories → `https://github.com/Gaudi111/status-timeline-card`, category **Dashboard** → download → Ctrl+F5.
 
-**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.11` as a JavaScript module resource (change `?v=` on each update).
+**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.11.1` as a JavaScript module resource (change `?v=` on each update).
 
 
 ## Usage
@@ -116,14 +114,14 @@ Set `show_value: false` (card-wide or per entity) to hide the value and keep onl
 | `hour_step` | `0` (auto) | Hours between axis labels. |
 | `refresh_interval` | `300` | History reload seconds. |
 | `time_zone` | `auto` | `auto`, `server`, `local`. |
-| `off_color` / `unavailable_color` | theme | Bar background / hatch color. |
+| `off_color` / `unavailable_color` | theme | Bar background / hatch color (see *Colors*). |
 
 ### Per entity
 | Option | Description |
 |---|---|
 | `entity` | Required. |
 | `name` / `icon` | Overrides. |
-| `color` | CSS color or `[r, g, b]`. Defaults: blue, orange, green. |
+| `color` | CSS color or `[r, g, b]` (see *Colors*). Defaults: blue, orange, green. |
 | `on_states`, `off_states`, `on_above`, `invert`, `show_value` | Override the card defaults. |
 
 ### State classification order
@@ -132,6 +130,20 @@ Set `show_value: false` (card-wide or per entity) to hide the value and keep onl
 3. `on_above` (numeric) → ON if value > threshold
 4. `on_states` → ON, anything else OFF
 `invert` swaps ON/OFF.
+
+## Colors
+`color`, `off_color` and `unavailable_color` accept:
+
+| Format | Example |
+|---|---|
+| Hex | `"#2196f3"`, `"#fff"` |
+| Named | `red`, `teal` |
+| Functions | `"rgb(33,150,243)"`, `"rgba(0,0,0,.5)"`, `"hsl(200 80% 50%)"` |
+| Theme variable | `"var(--accent-color)"`, `"var(--my-color, #fff)"` |
+| RGB list | `[33, 150, 243]` |
+
+Values must be a valid CSS color and may not contain `; { } < > " ' \` `` ` `` or `@`.
+Invalid values are ignored (a warning is logged in the browser console and shown in the visual editor) and the default color is used.
 
 ## Screenshots
 ![On-Off Entity Dashboard Screenshot](images/tv-timeline.png)
