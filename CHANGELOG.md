@@ -1,15 +1,29 @@
 # Changelog
 
-Versioning scheme: **`YEAR.MONTH.SUBVERSION`** (e.g. `2026.10.6` = 6th release of October 2026).
-The subversion restarts at `1` every new month. GitHub releases use the same number (HACS reads them).
+Versioning scheme:
+- **`YYYY.MM`** for the first release of a month (e.g. `2026.11`).
+- **`YYYY.MM.S`** for later releases in the same month (e.g. `2026.11.1`, `2026.11.2`).
+
+GitHub releases use the same number (HACS / Marketplace read them).
+Releases up to `2026.10.6` used `YYYY.MM.S` from the first release of the month and are kept unchanged.
+
+## 2026.11
+### Added
+- README: "Open in HACS / Marketplace" button and installation steps for the Home Assistant Marketplace (2026.11+) and the HACS store.
+- README: **Screenshots** section (on/off entity and numeric entity examples).
+### Changed
+- Versioning moved to `YYYY.MM` / `YYYY.MM.S` (see above).
+- README installation section reordered: Marketplace / HACS first, custom repository and manual install as alternatives.
+### Removed
+- Mock-up preview image (`images/preview.png`, `images/preview.svg`); replaced by real screenshots.
+### Card
+- No functional changes. Version string updated to `2026.11`.
 
 ## 2026.10.6
 ### Added
-- **Numeric threshold entities show their current value in the state chip**: `Heater │ 152.3 W │ On`.
-  The value uses Home Assistant's formatting (unit and display precision); the status badge on the right
-  follows the `on_above` rule (and `invert`).
+- Numeric threshold entities show their current value in the state chip: `Heater │ 152.3 W │ On`.
 - Chip tooltip explains the rule, e.g. `152.3 W > 10 W (threshold) → On`.
-- `show_value` option (card default `true`, overridable per entity) to hide the value and keep only the status.
+- `show_value` option (card default `true`, overridable per entity).
 ### Changed
 - For threshold entities the status badge is always the evaluated On / Off (independent of `state_display`).
 - If the state is non-numeric (e.g. `unavailable`), the chip shows only the status, following `off_states`.
@@ -30,7 +44,6 @@ The subversion restarts at `1` every new month. GitHub releases use the same num
 - Row clamping to the next day's start (DST-safe), `state_display` option, `CHANGELOG.md`.
 ### Changed
 - Current-state chips honor the configured mapping (`off_states`, `invert`).
-- Version numbering moved to `YEAR.MONTH.SUBVERSION`.
 ### Breaking
 - Configs with `day_end` > `day_start` now need `partial_day: true`.
 
