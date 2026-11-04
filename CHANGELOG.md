@@ -7,17 +7,29 @@ Versioning scheme:
 GitHub releases use the same number (HACS / Marketplace read them).
 Releases up to `2026.10.6` used `YYYY.MM.S` from the first release of the month and are kept unchanged.
 
+## 2026.11.1
+### Security
+- **Color options can no longer inject markup or CSS** (reported in the HACS default-repository review).
+  - New `sanitizeColor()`: accepts `[r, g, b]` (clamped integers) or a CSS color string; strings containing
+    `; { } < > " ' \` `` ` `` `@` or line breaks are rejected, and the value must pass `CSS.supports("color", …)`
+    (allow-list regex fallback when `CSS.supports` is unavailable).
+  - Invalid `color`, `on_color`, `off_color` and `unavailable_color` values are ignored with a console warning and the default is used.
+  - Colors are no longer interpolated into HTML or the `<style>` block: they are applied after rendering with
+    `element.style.setProperty("--c" | "--stc-off" | "--stc-un", value)`.
+  - Duty-cycle width (`--p`), bar height (`--stc-h`) and grid rows are also applied via the CSSOM from validated numbers.
+  - Visual editor shows an alert for invalid colors (rendered with `textContent`).
+### Changed
+- README: new *Colors* section with accepted formats.
+
 ## 2026.11
 ### Added
 - README: "Open in HACS / Marketplace" button and installation steps for the Home Assistant Marketplace (2026.11+) and the HACS store.
 - README: **Screenshots** section (on/off entity and numeric entity examples).
 ### Changed
-- Versioning moved to `YYYY.MM` / `YYYY.MM.S` (see above).
+- Versioning moved to `YYYY.MM` / `YYYY.MM.S`.
 - README installation section reordered: Marketplace / HACS first, custom repository and manual install as alternatives.
 ### Removed
 - Mock-up preview image (`images/preview.png`, `images/preview.svg`); replaced by real screenshots.
-### Card
-- No functional changes. Version string updated to `2026.11`.
 
 ## 2026.10.6
 ### Added
