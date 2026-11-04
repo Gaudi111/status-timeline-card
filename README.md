@@ -5,20 +5,19 @@
 [![Validate](https://github.com/Gaudi111/status-timeline-card/actions/workflows/validate.yml/badge.svg)](https://github.com/Gaudi111/status-timeline-card/actions/workflows/validate.yml)
 · [Changelog](CHANGELOG.md)
 
-![Status Timeline Card preview](images/preview.png)
 
 Lovelace card showing the **on/off history of up to 3 entities** as **grouped horizontal bars per day**, with the **total on-time** and **duty cycle %** on the right of each bar.
 
 Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read recorded history.
 
-## What's new in 2026.10.4
-- **Duty cycle %** column to the right of the total, with selectable basis (elapsed / full day / available time) and 0–2 decimals.
+## What's new in 2026.10.6
+- Numeric entities with a threshold (`on_above`) show their **current value and the evaluated status** in the top chip, e.g. `Heater │ 152.3 W │ On`.
 - Full history in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 - **Up to 3 entities** per card, clustered bars per day, each with its **own color**.
 - **Total on-time** and **duty cycle %** per bar.
-- **Current state chips** in each entity's color, using the configured ON/OFF mapping.
+- **Current state chips** in each entity's color, using the configured ON/OFF mapping; numeric threshold entities also show the live value.
 - **OFF mapping** (`off_states`): e.g. treat `unavailable` / `unknown` as OFF.
 - **Duration inside each ON block**, shown only when it fits.
 - **Logical day**: `day_start` / `day_end` (e.g. 04:00 → 04:00), validated so days never overlap.
@@ -28,7 +27,7 @@ Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvesp
 
 ## Installation
 **HACS**: ⋮ → Custom repositories → `https://github.com/Gaudi111/status-timeline-card`, category **Dashboard** → install → Ctrl+F5.
-**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.10.4` as a JavaScript module resource (change `?v=` on each update).
+**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.10.6` as a JavaScript module resource (change `?v=` on each update).
 
 ## Usage
 ```yaml
@@ -38,9 +37,6 @@ day_start: "04:00"
 day_end: "04:00"
 days: 7
 off_states: [unavailable, unknown]
-show_duty_cycle: true
-duty_cycle_basis: elapsed
-duty_cycle_decimals: 0
 entities:
   - entity: binary_sensor.water_pump
     name: Pump
@@ -51,19 +47,26 @@ entities:
   - entity: sensor.heater_power
     name: Heater
     color: "#e91e63"
-    on_above: 10
+    on_above: 10          # W → chip shows "152.3 W │ On"
 ```
+
+## Current-state chips
+| Entity type | Chip content |
+|---|---|
+| Numeric with `on_above` | `Name │ value with unit │ On/Off` (status from the threshold rule, honoring `invert`). Hover: `152.3 W > 10 W (threshold) → On`. |
+| Numeric with `on_above`, state not numeric (e.g. `unavailable`) | `Name │ status` following `off_states` (Off if mapped, otherwise Unavailable). |
+| Other entities | `Name │ state` according to `state_display`. |
+
+Set `show_value: false` (card-wide or per entity) to hide the value and keep only the status. The value uses Home Assistant's formatting, so unit and decimals follow the entity's display precision setting.
 
 ## Duty cycle
 `duty cycle = on-time / considered time`
 
-| `duty_cycle_basis` | Considered time | Current day at 16:00 (day starts 04:00, 6 h on) | Use when |
-|---|---|---|---|
-| `elapsed` (default) | Time elapsed in the day (full window for past days) | 6 / 12 h = **50%** | You want a live, comparable rate. |
-| `window` | Full day window, always | 6 / 24 h = **25%** | You want today's value to grow toward the final figure. |
-| `available` | Elapsed time minus unavailable / unrecorded time | 6 / 10 h = **60%** (with 2 h unavailable) | Sensor outages should not lower the %. |
-
-States mapped with `off_states` count as OFF (included in the considered time). The footer percentage uses the same basis over all displayed days.
+| `duty_cycle_basis` | Considered time | Current day at 16:00 (day starts 04:00, 6 h on) |
+|---|---|---|
+| `elapsed` (default) | Time elapsed in the day (full window for past days) | 6 / 12 h = **50%** |
+| `window` | Full day window, always | 6 / 24 h = **25%** |
+| `available` | Elapsed time minus unavailable / unrecorded time | 6 / 10 h = **60%** (with 2 h unavailable) |
 
 ## Day window rules
 | `day_start` → `day_end` | Result |
@@ -88,10 +91,11 @@ States mapped with `off_states` count as OFF (included in the considered time). 
 | `show_total` | `true` | Total on-time right of each bar. |
 | `total_format` | `hm` | `hm` (5h 07m) or `decimal` (5.12 h). |
 | `show_duty_cycle` | `true` | Duty cycle % right of the total. |
-| `duty_cycle_basis` | `elapsed` | `elapsed`, `window` or `available` (see above). |
+| `duty_cycle_basis` | `elapsed` | `elapsed`, `window` or `available`. |
 | `duty_cycle_decimals` | `0` | 0–2. |
 | `show_state` | `true` | Current-state chips with color reference. |
-| `state_display` | `mapped` | `mapped`, `mapped_only` or `raw`. |
+| `state_display` | `mapped` | `mapped`, `mapped_only` or `raw` (non-threshold entities). |
+| `show_value` | `true` | Show the live value in chips of numeric threshold entities. |
 | `show_block_values` | `true` | Duration inside ON blocks when it fits. |
 | `block_value_min_ms` | `0` | Only label blocks at least this long. |
 | `show_summary` / `show_hours` / `show_now` / `show_unavailable` | `true` | Footer, axis, now marker, hatched unavailable. |
@@ -110,7 +114,7 @@ States mapped with `off_states` count as OFF (included in the considered time). 
 | `entity` | Required. |
 | `name` / `icon` | Overrides. |
 | `color` | CSS color or `[r, g, b]`. Defaults: blue, orange, green. |
-| `on_states`, `off_states`, `on_above`, `invert` | Override the card defaults. |
+| `on_states`, `off_states`, `on_above`, `invert`, `show_value` | Override the card defaults. |
 
 ### State classification order
 1. In `off_states` → **OFF**
@@ -118,7 +122,6 @@ States mapped with `off_states` count as OFF (included in the considered time). 
 3. `on_above` (numeric) → ON if value > threshold
 4. `on_states` → ON, anything else OFF
 `invert` swaps ON/OFF.
-
 
 ## Screenshots
 ![On-Off Entity Dashboard Screenshot](images/tv-timeline.png)
