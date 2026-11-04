@@ -1,28 +1,33 @@
 # Changelog
 
-Versioning scheme: **`YEAR.MONTH.SUBVERSION`** (e.g. `2026.10.4` = 4th release of October 2026).
+Versioning scheme: **`YEAR.MONTH.SUBVERSION`** (e.g. `2026.10.6` = 6th release of October 2026).
 The subversion restarts at `1` every new month. GitHub releases use the same number (HACS reads them).
+
+## 2026.10.6
+### Added
+- **Numeric threshold entities show their current value in the state chip**: `Heater │ 152.3 W │ On`.
+  The value uses Home Assistant's formatting (unit and display precision); the status badge on the right
+  follows the `on_above` rule (and `invert`).
+- Chip tooltip explains the rule, e.g. `152.3 W > 10 W (threshold) → On`.
+- `show_value` option (card default `true`, overridable per entity) to hide the value and keep only the status.
+### Changed
+- For threshold entities the status badge is always the evaluated On / Off (independent of `state_display`).
+- If the state is non-numeric (e.g. `unavailable`), the chip shows only the status, following `off_states`.
+
+## 2026.10.5
+### Fixed
+- `LICENSE` recreated from GitHub's MIT template so the license is detected (HACS license check).
 
 ## 2026.10.4
 ### Added
-- **Duty cycle column**: on-time percentage to the right of each bar's total, with a thin color bar
-  proportional to the value. Hover shows `on-time / considered time`.
-- `show_duty_cycle` (default `true`), `duty_cycle_basis` (`elapsed` | `window` | `available`),
-  `duty_cycle_decimals` (0–2). Also available in the visual editor.
-- Summary footer percentage now uses the same duty-cycle basis and decimals.
-### Changed
-- Total tooltip now shows the duty-cycle breakdown.
-- Unrecorded time (before the first history record) is treated as unavailable for the `available` basis.
-- Preview image and README updated; `documentationURL` points to the repository.
+- Duty cycle column right of each bar's total, with a thin proportional color bar and breakdown tooltip.
+- `show_duty_cycle`, `duty_cycle_basis` (`elapsed` | `window` | `available`), `duty_cycle_decimals` (0–2).
+- Summary footer percentage uses the same duty-cycle basis and decimals.
 
 ## 2026.10.3
 ### Added
-- Day window validation: `day_end` later than `day_start` is rejected (it would overlap the next day and
-  count records twice). Clear error in the card and in the visual editor.
-- `partial_day: true` to explicitly allow a same-day window (e.g. `08:00` → `20:00`).
-- Safety net: each day row is clamped to the next day's start (DST-safe).
-- `state_display` option: `mapped` (default), `mapped_only`, `raw`.
-- `CHANGELOG.md`.
+- Day window validation (`day_end` later than `day_start` rejected unless `partial_day: true`).
+- Row clamping to the next day's start (DST-safe), `state_display` option, `CHANGELOG.md`.
 ### Changed
 - Current-state chips honor the configured mapping (`off_states`, `invert`).
 - Version numbering moved to `YEAR.MONTH.SUBVERSION`.
@@ -31,13 +36,10 @@ The subversion restarts at `1` every new month. GitHub releases use the same num
 
 ## 2026.10.2 (formerly 1.1.0)
 ### Added
-- Up to 3 entities per card, grouped bars per day, per-entity color.
-- `off_states` to map states such as `unavailable` to OFF.
-- Current-state header with one chip per entity.
-- Duration label inside each ON block when it fits.
-- Per-entity summary footer; visual editor with one section per entity.
+- Up to 3 entities with grouped bars and per-entity color, `off_states`, current-state chips,
+  in-bar duration labels, per-entity summary, visual editor with one section per entity.
 
 ## 2026.10.1 (formerly 1.0.0)
 ### Added
-- Initial release: recorder history of any entity, configurable logical day, 1–10 days, total on-time per day,
+- Initial release: recorder history of any entity, configurable logical day, 1–10 days, total on-time,
   summary, hour axis, now marker, unavailable hatching, `on_states`, `on_above`, `invert`, time zone / DST aware, ES/EN/PT.
