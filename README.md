@@ -1,5 +1,7 @@
 # Status Timeline Card
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gaudi111&repository=status-timeline-card&category=plugin)
+
 ![version](https://img.shields.io/github/v/release/Gaudi111/status-timeline-card)
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![Validate](https://github.com/Gaudi111/status-timeline-card/actions/workflows/validate.yml/badge.svg)](https://github.com/Gaudi111/status-timeline-card/actions/workflows/validate.yml)
@@ -9,6 +11,7 @@
 Lovelace card showing the **on/off history of up to 3 entities** as **grouped horizontal bars per day**, with the **total on-time** and **duty cycle %** on the right of each bar.
 
 Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read recorded history.
+
 
 ## What's new in 2026.10.6
 - Numeric entities with a threshold (`on_above`) show their **current value and the evaluated status** in the top chip, e.g. `Heater │ 152.3 W │ On`.
@@ -27,7 +30,12 @@ Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvesp
 
 ## Installation
 **HACS**: ⋮ → Custom repositories → `https://github.com/Gaudi111/status-timeline-card`, category **Dashboard** → install → Ctrl+F5.
+
 **Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.10.6` as a JavaScript module resource (change `?v=` on each update).
+
+**Marketplace / HACS**: click the button above, or search for *Status Timeline Card*
+(Settings → Marketplace on Home Assistant 2026.11+, or HACS on older versions). Download, then reload the browser.
+
 
 ## Usage
 ```yaml
