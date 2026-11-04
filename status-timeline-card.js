@@ -11,13 +11,15 @@
  * https://github.com/andregoncalvespires/schedule-timeline-card
  */
 
-const CARD_VERSION = "2026.11";
+const CARD_VERSION = "2026.11.1";
 const CARD_TAG = "status-timeline-card";
 const EDITOR_TAG = "status-timeline-card-editor";
 const DAY_MS = 86400000;
 const MAX_DAYS = 10;
 const MAX_ENTITIES = 3;
 const PALETTE = ["#2196f3", "#ff9800", "#4caf50"];
+const DEFAULT_OFF_COLOR = "var(--secondary-background-color, rgba(127,127,127,.15))";
+const DEFAULT_UNAV_COLOR = "var(--disabled-text-color, #9e9e9e)";
 const UNAV_STATES = ["unavailable", "unknown", "none", ""];
 const DEFAULT_ON_STATES = ["on", "open", "home", "playing", "heat", "cool", "heating", "cooling", "active", "detected", "true"];
 const DUTY_BASES = ["elapsed", "window", "available"];
@@ -276,10 +278,52 @@ function formatDuration(ms, fmt) {
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
 }
 
-function cssColor(v, fallback) {
-  if (Array.isArray(v) && v.length >= 3) return `rgb(${v[0]},${v[1]},${v[2]})`;
-  if (v && typeof v === "string") return v;
-  return fallback;
+/* ------------------------------------------------------------------ */
+/* Color sanitizing                                                    */
+/* ------------------------------------------------------------------ */
+
+// Characters that could end a CSS declaration/rule, an HTML attribute or a tag.
+const COLOR_FORBIDDEN = /[<>"'`;{}\\\n\r\t@]/;
+// Allow-list used when CSS.supports() is not available (e.g. tests / very old browsers).
+const COLOR_PATTERN = new RegExp(
+  "^(?:" +
+    "#[0-9a-f]{3,8}" +
+    "|[a-z]{3,30}" +
+    "|(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\\([0-9a-z.,%\\s/+-]{1,80}\\)" +
+    "|var\\(--[a-z0-9_-]{1,64}(?:\\s*,\\s*[#0-9a-z.,%\\s/()+-]{1,80})?\\)" +
+  ")$", "i");
+
+/**
+ * Returns a safe CSS color, or null if the value is not a valid color.
+ * Accepts [r, g, b] arrays (clamped integers) and CSS color strings.
+ * Strings are rejected if they contain any character that could escape a CSS value,
+ * and must then be a valid CSS color (CSS.supports) or match the allow-list.
+ */
+function sanitizeColor(v) {
+  if (Array.isArray(v)) {
+    if (v.length < 3) return null;
+    const n = v.slice(0, 3).map((x) => Math.round(Number(x)));
+    if (n.some((x) => !Number.isFinite(x))) return null;
+    const [r, g, b] = n.map((x) => Math.min(255, Math.max(0, x)));
+    return `rgb(${r},${g},${b})`;
+  }
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s || s.length > 120 || COLOR_FORBIDDEN.test(s)) return null;
+  const css = typeof CSS !== "undefined" && typeof CSS.supports === "function" ? CSS : null;
+  if (css ? !css.supports("color", s) : !COLOR_PATTERN.test(s)) return null;
+  return s;
+}
+
+/** Sanitized color, or the fallback (with a console warning) when the value is invalid. */
+function colorOr(v, fallback, label) {
+  if (v === undefined || v === null || v === "") return fallback;
+  const safe = sanitizeColor(v);
+  if (safe === null) {
+    console.warn(`${CARD_TAG}: ignoring invalid color for ${label}: ${JSON.stringify(v)}`);
+    return fallback;
+  }
+  return safe;
 }
 
 function esc(s) {
@@ -296,15 +340,30 @@ function normalizeEntities(c) {
     .map((e) => (typeof e === "string" ? { entity: e } : { ...(e || {}) }))
     .filter((e) => e.entity)
     .slice(0, MAX_ENTITIES);
-  return list.map((e, i) => ({
-    ...e,
-    color: cssColor(e.color, i === 0 && c.on_color ? cssColor(c.on_color) : PALETTE[i]),
-    invert: e.invert ?? c.invert,
-    on_above: e.on_above ?? c.on_above,
-    show_value: e.show_value ?? c.show_value,
-    _onStates: toList(e.on_states ?? c.on_states, DEFAULT_ON_STATES),
-    _offStates: toList(e.off_states ?? c.off_states, []),
-  }));
+  return list.map((e, i) => {
+    const fallback = i === 0 && c.on_color ? colorOr(c.on_color, PALETTE[0], "on_color") : PALETTE[i];
+    return {
+      ...e,
+      color: colorOr(e.color, fallback, `${e.entity} color`),
+      invert: e.invert ?? c.invert,
+      on_above: e.on_above ?? c.on_above,
+      show_value: e.show_value ?? c.show_value,
+      _onStates: toList(e.on_states ?? c.on_states, DEFAULT_ON_STATES),
+      _offStates: toList(e.off_states ?? c.off_states, []),
+    };
+  });
+}
+
+/** Returns a list of invalid color options (used by the visual editor). */
+function invalidColors(cfg) {
+  const bad = [];
+  const check = (v, label) => { if (v !== undefined && v !== null && v !== "" && sanitizeColor(v) === null) bad.push(label); };
+  check(cfg.on_color, "on_color");
+  check(cfg.off_color, "off_color");
+  check(cfg.unavailable_color, "unavailable_color");
+  const raw = Array.isArray(cfg.entities) ? cfg.entities : [];
+  raw.forEach((e, i) => { if (e && typeof e === "object") check(e.color, `Entity ${i + 1} color`); });
+  return bad;
 }
 
 /* ------------------------------------------------------------------ */
@@ -348,6 +407,8 @@ class StatusTimelineCard extends HTMLElement {
     c.refresh_interval = Math.max(30, Number(c.refresh_interval) || DEFAULTS.refresh_interval);
     const autoH = c._entities.length === 1 ? 18 : 14;
     c.row_height = Math.min(48, Math.max(8, Number(c.row_height) || autoH));
+    c._offColor = colorOr(c.off_color, DEFAULT_OFF_COLOR, "off_color");
+    c._unavColor = colorOr(c.unavailable_color, DEFAULT_UNAV_COLOR, "unavailable_color");
 
     const ids = c._entities.map((e) => e.entity).join("|");
     if (!this._config || this._ids !== ids) { this._history = null; this._fetchedFrom = Infinity; }
@@ -506,9 +567,13 @@ class StatusTimelineCard extends HTMLElement {
     }
   }
 
-  /** Builds one current-state chip. Numeric threshold entities show "value | status". */
+  /**
+   * Builds one current-state chip. Numeric threshold entities show "value | status".
+   * The entity color is NOT written into the HTML: elements carry data-e="<index>"
+   * and the color is applied afterwards with style.setProperty() (see _applyStyles).
+   */
   _chipHtml(e, i) {
-    if (!e.st) return `<div class="chip missing" style="--c:${e.ec.color}"><span class="dot"></span>${esc(this._t("not_found"))}: ${esc(e.ec.entity)}</div>`;
+    if (!e.st) return `<div class="chip missing" data-e="${i}"><span class="dot"></span>${esc(this._t("not_found"))}: ${esc(e.ec.entity)}</div>`;
     const icon = e.ec.icon || e.st.attributes.icon || "";
     const numeric = isNumericRule(e.st.state, e.ec);
     let valueHtml = "", badge, tip;
@@ -522,11 +587,33 @@ class StatusTimelineCard extends HTMLElement {
       badge = this._stateText(e);
       tip = `${e.ec.entity} · ${e.st.state}`;
     }
-    return `<div class="chip ${e.cur}" data-i="${i}" style="--c:${e.ec.color}" title="${esc(tip)}">
+    return `<div class="chip ${e.cur}" data-i="${i}" data-e="${i}" title="${esc(tip)}">
         <span class="ico">${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : `<ha-state-icon data-i="${i}"></ha-state-icon>`}</span>
         <span class="nm">${esc(e.name)}</span>
         ${valueHtml}<span class="badge">${esc(badge)}</span>
       </div>`;
+  }
+
+  /** Applies colors and numeric layout values through the CSSOM (never via HTML strings). */
+  _applyStyles(root, ents) {
+    const card = root.querySelector("ha-card");
+    if (card && card.style) {
+      card.style.setProperty("--stc-off", this._config._offColor);
+      card.style.setProperty("--stc-un", this._config._unavColor);
+      card.style.setProperty("--stc-h", `${Number(this._config.row_height)}px`);
+    }
+    for (const el of root.querySelectorAll("[data-e]")) {
+      const e = ents[Number(el.dataset.e)];
+      if (e && el.style) el.style.setProperty("--c", e.ec.color);
+    }
+    for (const el of root.querySelectorAll("[data-p]")) {
+      const p = Number(el.dataset.p);
+      if (Number.isFinite(p) && el.style) el.style.setProperty("--p", `${Math.min(100, Math.max(0, p))}%`);
+    }
+    for (const el of root.querySelectorAll("[data-r]")) {
+      const r = Number(el.dataset.r);
+      if (Number.isInteger(r) && el.style) el.style.gridRow = String(r);
+    }
   }
 
   _render() {
@@ -553,7 +640,7 @@ class StatusTimelineCard extends HTMLElement {
       e.totalOn = 0; e.totalBase = 0; e.days = 0;
     }
 
-    // Hour axis
+    // Hour axis (all values below are numbers computed by the card)
     const hours = lenMin / 60;
     const step = Number(c.hour_step) > 0 ? Number(c.hour_step)
       : hours <= 6 ? 1 : hours <= 12 ? 2 : hours <= 18 ? 3 : 4;
@@ -594,16 +681,19 @@ class StatusTimelineCard extends HTMLElement {
             const dur = formatDuration(b.b - b.a, "hm");
             const tip = `${e.name} · ${this._statusText(b.c)}: ${this._fmtTime(b.a, tz, r.dateUtc)} → ${this._fmtTime(b.b, tz, r.dateUtc)} (${dur})`;
             const showV = c.show_block_values && b.c === "on" && (b.b - b.a) >= Number(c.block_value_min_ms || 0);
-            return `<div class="blk ${b.c}" style="left:${left.toFixed(3)}%;width:${Math.max(width, 0.15).toFixed(3)}%" title="${esc(tip)}">${showV ? `<span class="v">${esc(dur)}</span>` : ""}</div>`;
+            const cls = b.c === "on" ? "on" : "unav";
+            return `<div class="blk ${cls}" style="left:${left.toFixed(3)}%;width:${Math.max(width, 0.15).toFixed(3)}%" title="${esc(tip)}">${showV ? `<span class="v">${esc(dur)}</span>` : ""}</div>`;
           }).join("");
 
         const dcTxt = dc && elapsed > 0 ? formatPct(dc.pct, c.duty_cycle_decimals) : "–";
         const dcTip = dc ? `${e.name} · ${this._t("duty")}: ${formatDuration(onMs, "hm")} / ${formatDuration(dc.base, "hm")} ${basisTxt}` : "";
+        const row = i + 1;
         const totalHtml = c.show_total
-          ? `<div class="total" data-r="${i + 1}" style="--c:${e.ec.color}" title="${esc(dcTip)}">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
+          ? `<div class="total" data-r="${row}" data-e="${i}" title="${esc(dcTip)}">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
+        const pVal = dc ? Math.min(100, dc.pct).toFixed(1) : "0";
         const dutyHtml = c.show_duty_cycle
-          ? `<div class="duty" data-r="${i + 1}" style="--c:${e.ec.color};--p:${dc ? Math.min(100, dc.pct).toFixed(1) : 0}%" title="${esc(dcTip)}">${esc(dcTxt)}</div>` : "";
-        return `<div class="track" style="--c:${e.ec.color};grid-row:${i + 1}">${gridHtml}${blocksHtml}${futureHtml}${nowHtml}</div>${totalHtml}${dutyHtml}`;
+          ? `<div class="duty" data-r="${row}" data-e="${i}" data-p="${pVal}" title="${esc(dcTip)}">${esc(dcTxt)}</div>` : "";
+        return `<div class="track" data-r="${row}" data-e="${i}">${gridHtml}${blocksHtml}${futureHtml}${nowHtml}</div>${totalHtml}${dutyHtml}`;
       }).join("");
 
       return `<div class="day${r.current ? " current" : ""}" style="--n:${ents.length}">
@@ -619,20 +709,18 @@ class StatusTimelineCard extends HTMLElement {
     if (!this._history && !this._error) status = `<div class="status">${esc(this._t("loading"))}</div>`;
     if (this._error) status = `<div class="status err">${esc(this._t("error"))}: ${esc(this._error)}</div>`;
 
-    const summaryHtml = c.show_summary && this._history ? `<div class="summary">${ents.filter((e) => e.days > 0).map((e) => `
-        <div class="srow" style="--c:${e.ec.color}"><span class="dot"></span>${multi ? `<span class="nm">${esc(e.name)}</span>` : ""}
+    const summaryHtml = c.show_summary && this._history ? `<div class="summary">${ents.map((e, i) => e.days > 0 ? `
+        <div class="srow" data-e="${i}"><span class="dot"></span>${multi ? `<span class="nm">${esc(e.name)}</span>` : ""}
         ${esc(this._t("total"))} (${e.days} ${esc(this._t("days"))}): <b>${esc(formatDuration(e.totalOn, c.total_format))}</b>
         · ${esc(this._t("avg"))}: <b>${esc(formatDuration(e.totalOn / e.days, c.total_format))}</b>
-        · <span title="${esc(this._t("duty"))} ${esc(basisTxt)}">${e.totalBase > 0 ? esc(formatPct((e.totalOn / e.totalBase) * 100, c.duty_cycle_decimals)) : "–"}</span></div>`).join("")}</div>` : "";
+        · <span title="${esc(this._t("duty"))} ${esc(basisTxt)}">${e.totalBase > 0 ? esc(formatPct((e.totalOn / e.totalBase) * 100, c.duty_cycle_decimals)) : "–"}</span></div>` : "").join("")}</div>` : "";
 
-    const offColor = c.off_color || "var(--secondary-background-color, rgba(127,127,127,.15))";
-    const unColor = c.unavailable_color || "var(--disabled-text-color, #9e9e9e)";
-    const dutyW = 38 + 7 * c.duty_cycle_decimals;
+    // Only numbers are interpolated into the stylesheet; colors are set via setProperty().
+    const dutyW = 38 + 7 * Number(c.duty_cycle_decimals);
     const cols = `78px 1fr${c.show_total ? " 64px" : ""}${c.show_duty_cycle ? ` ${dutyW}px` : ""}`;
 
     root.innerHTML = `
       <style>
-        :host { --stc-off:${offColor}; --stc-un:${unColor}; --stc-h:${c.row_height}px; }
         ha-card { padding: 12px 16px 14px; }
         .title { font-size:16px; font-weight:500; margin-bottom:8px; }
         .states { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
@@ -670,7 +758,7 @@ class StatusTimelineCard extends HTMLElement {
                  color: var(--primary-text-color); border-right: 3px solid var(--c); padding-right:5px; line-height: var(--stc-h); }
         .duty { grid-column:-2 / -1; position:relative; font-size:11px; text-align:right; font-variant-numeric: tabular-nums;
                 white-space:nowrap; color: var(--secondary-text-color); line-height: var(--stc-h); padding-right:2px; }
-        .duty::after { content:""; position:absolute; left:0; bottom:1px; height:2px; width:var(--p); max-width:100%;
+        .duty::after { content:""; position:absolute; left:0; bottom:1px; height:2px; width:var(--p, 0%); max-width:100%;
                        background: var(--c); opacity:.55; border-radius:1px; }
         .axis { display:grid; grid-template-columns:${cols}; column-gap:8px; }
         .ticks { position:relative; height:14px; font-size:10px; color: var(--secondary-text-color); }
@@ -690,14 +778,14 @@ class StatusTimelineCard extends HTMLElement {
         ${summaryHtml}
       </ha-card>`;
 
-    for (const t of root.querySelectorAll("[data-r]")) t.style.gridRow = t.dataset.r;
+    this._applyStyles(root, ents);
     for (const si of root.querySelectorAll("ha-state-icon")) {
-      const e = ents[+si.dataset.i];
+      const e = ents[Number(si.dataset.i)];
       si.hass = hass; si.stateObj = e.st;
     }
     for (const chip of root.querySelectorAll(".chip[data-i]")) {
       chip.addEventListener("click", () => {
-        const id = ents[+chip.dataset.i].ec.entity;
+        const id = ents[Number(chip.dataset.i)].ec.entity;
         this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: id }, bubbles: true, composed: true }));
       });
     }
@@ -871,19 +959,22 @@ class StatusTimelineCardEditor extends HTMLElement {
 
   _validate() {
     if (!this._warn) return;
+    const msgs = [];
     try {
       validateWindow(this._config.day_start ?? DEFAULTS.day_start, this._config.day_end ?? DEFAULTS.day_end, this._config.partial_day);
-      this._warn.style.display = "none";
     } catch (e) {
-      this._warn.textContent = e.message;
-      this._warn.style.display = "block";
+      msgs.push(e.message);
     }
+    const bad = invalidColors(this._config);
+    if (bad.length) msgs.push(`Invalid color (ignored, default used): ${bad.join(", ")}. Use e.g. #2196f3, red, rgb(33,150,243) or var(--accent-color).`);
+    this._warn.textContent = msgs.join(" ");   // textContent: never parsed as HTML
+    this._warn.style.display = msgs.length ? "block" : "none";
   }
 }
 
 StatusTimelineCard._helpers = {
   parseTime, validateWindow, computeRows, classify, isRemapped, isNumericRule, buildIntervals, clipToWindow,
-  dutyCycle, formatPct, formatDuration, normalizeEntities, toFormData, fromFormData,
+  dutyCycle, formatPct, formatDuration, normalizeEntities, toFormData, fromFormData, sanitizeColor, invalidColors,
 };
 
 if (!customElements.get(CARD_TAG)) {
