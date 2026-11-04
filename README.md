@@ -13,8 +13,10 @@ Lovelace card showing the **on/off history of up to 3 entities** as **grouped ho
 Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read recorded history.
 
 
-## What's new in 2026.10.6
-- Numeric entities with a threshold (`on_above`) show their **current value and the evaluated status** in the top chip, e.g. `Heater │ 152.3 W │ On`.
+## What's new in 2026.11
+- **Marketplace / HACS store ready**: install from the Home Assistant Marketplace (2026.11+) or the HACS store, with the button above.
+- **New versioning**: `YYYY.MM` for the first release of a month, `YYYY.MM.S` for later releases in the same month.
+- Screenshots section replaces the mock-up preview.
 - Full history in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
@@ -29,12 +31,12 @@ Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvesp
   time zone / DST aware, visual editor, ES / EN / PT.
 
 ## Installation
-**HACS**: ⋮ → Custom repositories → `https://github.com/Gaudi111/status-timeline-card`, category **Dashboard** → install → Ctrl+F5.
+**Marketplace / HACS (recommended)**: click the button above, or search for *Status Timeline Card*
+(Settings → Marketplace on Home Assistant 2026.11+, or HACS on older versions). Download, then reload the browser (Ctrl+F5).
 
-**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.10.6` as a JavaScript module resource (change `?v=` on each update).
+**Custom repository** (until the card is listed in the store): HACS → ⋮ → Custom repositories → `https://github.com/Gaudi111/status-timeline-card`, category **Dashboard** → download → Ctrl+F5.
 
-**Marketplace / HACS**: click the button above, or search for *Status Timeline Card*
-(Settings → Marketplace on Home Assistant 2026.11+, or HACS on older versions). Download, then reload the browser.
+**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.11` as a JavaScript module resource (change `?v=` on each update).
 
 
 ## Usage
