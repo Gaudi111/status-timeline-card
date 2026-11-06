@@ -13,13 +13,16 @@ Lovelace card showing the **on/off history of up to 3 entities** as **grouped ho
 Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvespires/schedule-timeline-card) by andregoncalvespires, reworked to read recorded history.
 
 
-## What's new in 2026.11.1
-- **Security hardening**: color options are validated and applied safely (see *Colors* below). Invalid values are ignored and the default color is used.
+## What's new in 2026.11.2
+- **How long ON / OFF** in the state chip, e.g. `On · 2h 15m` (`show_on_duration`, `show_off_duration`).
+- **Running indicator**: today's total is shown in a colored box (or with an `ON` badge) while the entity is ON.
 - Full history in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 - **Up to 3 entities** per card, clustered bars per day, each with its **own color**.
 - **Total on-time** and **duty cycle %** per bar.
+- **How long ON / OFF** shown in each state chip (selectable independently).
+- **Running indicator** on today's total while the entity is ON.
 - **Current state chips** in each entity's color, using the configured ON/OFF mapping; numeric threshold entities also show the live value.
 - **OFF mapping** (`off_states`): e.g. treat `unavailable` / `unknown` as OFF.
 - **Duration inside each ON block**, shown only when it fits.
@@ -34,7 +37,7 @@ Based on the idea of [schedule-timeline-card](https://github.com/andregoncalvesp
 
 **Custom repository** (until the card is listed in the store): HACS → ⋮ → Custom repositories → `https://github.com/Gaudi111/status-timeline-card`, category **Dashboard** → download → Ctrl+F5.
 
-**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.11.1` as a JavaScript module resource (change `?v=` on each update).
+**Manual**: copy `status-timeline-card.js` to `/config/www/` and add `/local/status-timeline-card.js?v=2026.11.2` as a JavaScript module resource (change `?v=` on each update).
 
 
 ## Usage
@@ -65,7 +68,21 @@ entities:
 | Numeric with `on_above`, state not numeric (e.g. `unavailable`) | `Name │ status` following `off_states` (Off if mapped, otherwise Unavailable). |
 | Other entities | `Name │ state` according to `state_display`. |
 
+The status badge can also show how long the entity has been in its current state, e.g. `On · 2h 15m`:
+`show_on_duration` (default `true`) and `show_off_duration` (default `false`), card-wide or per entity.
+For numeric threshold entities the time counts from when the threshold was crossed, not from the last value change.
+If the period started before the loaded history, it is shown as `≥ 3d 4h`.
+
 Set `show_value: false` (card-wide or per entity) to hide the value and keep only the status. The value uses Home Assistant's formatting, so unit and decimals follow the entity's display precision setting.
+
+## Running indicator
+While an entity is ON, its total for the current day keeps increasing. `running_indicator` highlights it:
+
+| Value | Look |
+|---|---|
+| `box` (default) | Total inside a rounded box in the entity color |
+| `badge` | Small `ON` pill left of the total |
+| `none` | No indicator |
 
 ## Duty cycle
 `duty cycle = on-time / considered time`
@@ -98,6 +115,9 @@ Set `show_value: false` (card-wide or per entity) to hide the value and keep onl
 | `order` | `newest_first` | or `oldest_first`. |
 | `show_total` | `true` | Total on-time right of each bar. |
 | `total_format` | `hm` | `hm` (5h 07m) or `decimal` (5.12 h). |
+| `running_indicator` | `box` | `box`, `badge` or `none`: highlight today's total while the entity is ON. |
+| `show_on_duration` | `true` | Show how long the entity has been ON in the state chip. |
+| `show_off_duration` | `false` | Show how long the entity has been OFF in the state chip. |
 | `show_duty_cycle` | `true` | Duty cycle % right of the total. |
 | `duty_cycle_basis` | `elapsed` | `elapsed`, `window` or `available`. |
 | `duty_cycle_decimals` | `0` | 0–2. |
@@ -122,7 +142,7 @@ Set `show_value: false` (card-wide or per entity) to hide the value and keep onl
 | `entity` | Required. |
 | `name` / `icon` | Overrides. |
 | `color` | CSS color or `[r, g, b]` (see *Colors*). Defaults: blue, orange, green. |
-| `on_states`, `off_states`, `on_above`, `invert`, `show_value` | Override the card defaults. |
+| `on_states`, `off_states`, `on_above`, `invert`, `show_value`, `show_on_duration`, `show_off_duration` | Override the card defaults. |
 
 ### State classification order
 1. In `off_states` → **OFF**
