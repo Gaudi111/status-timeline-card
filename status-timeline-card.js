@@ -11,7 +11,7 @@
  * https://github.com/andregoncalvespires/schedule-timeline-card
  */
 
-const CARD_VERSION = "2026.11.1";
+const CARD_VERSION = "2026.11.2";
 const CARD_TAG = "status-timeline-card";
 const EDITOR_TAG = "status-timeline-card-editor";
 const DAY_MS = 86400000;
@@ -23,6 +23,7 @@ const DEFAULT_UNAV_COLOR = "var(--disabled-text-color, #9e9e9e)";
 const UNAV_STATES = ["unavailable", "unknown", "none", ""];
 const DEFAULT_ON_STATES = ["on", "open", "home", "playing", "heat", "cool", "heating", "cooling", "active", "detected", "true"];
 const DUTY_BASES = ["elapsed", "window", "available"];
+const RUNNING_INDICATORS = ["box", "badge", "none"];
 
 const DEFAULTS = {
   days: 7,
@@ -37,6 +38,7 @@ const DEFAULTS = {
   invert: false,
   show_total: true,
   total_format: "hm",
+  running_indicator: "box",
   show_duty_cycle: true,
   duty_cycle_basis: "elapsed",
   duty_cycle_decimals: 0,
@@ -47,6 +49,8 @@ const DEFAULTS = {
   show_state: true,
   state_display: "mapped",
   show_value: true,
+  show_on_duration: true,
+  show_off_duration: false,
   show_block_values: true,
   block_value_min_ms: 0,
   hour_step: 0,
@@ -61,19 +65,22 @@ const I18N = {
   en: {
     total: "Total", avg: "avg/day", days: "days", loading: "Loading history…",
     error: "Error loading history", not_found: "Entity not found", on: "On", off: "Off",
-    unavailable: "Unavailable", duty: "Duty cycle", threshold: "threshold",
+    unavailable: "Unavailable", duty: "Duty cycle", threshold: "threshold", since: "since",
+    on_short: "ON", running: "Running – total is increasing",
     basis_elapsed: "of elapsed time", basis_window: "of full day", basis_available: "of available time",
   },
   es: {
     total: "Total", avg: "prom/día", days: "días", loading: "Cargando historial…",
     error: "Error al cargar el historial", not_found: "Entidad no encontrada", on: "Encendido",
-    off: "Apagado", unavailable: "No disponible", duty: "Ciclo de trabajo", threshold: "umbral",
+    off: "Apagado", unavailable: "No disponible", duty: "Ciclo de trabajo", threshold: "umbral", since: "desde",
+    on_short: "ON", running: "En marcha – el total está aumentando",
     basis_elapsed: "del tiempo transcurrido", basis_window: "del día completo", basis_available: "del tiempo disponible",
   },
   pt: {
     total: "Total", avg: "média/dia", days: "dias", loading: "A carregar histórico…",
     error: "Erro ao carregar histórico", not_found: "Entidade não encontrada", on: "Ligado",
-    off: "Desligado", unavailable: "Indisponível", duty: "Ciclo de trabalho", threshold: "limiar",
+    off: "Desligado", unavailable: "Indisponível", duty: "Ciclo de trabalho", threshold: "limiar", since: "desde",
+    on_short: "ON", running: "Em funcionamento – o total está a aumentar",
     basis_elapsed: "do tempo decorrido", basis_window: "do dia completo", basis_available: "do tempo disponível",
   },
 };
@@ -220,6 +227,7 @@ function isRemapped(state, ec) {
   return ec._offStates.includes(s) || !!ec.invert;
 }
 
+/** Merges consecutive records with the same class into intervals [{a, b, c}]. */
 function buildIntervals(changes, now, ec) {
   const out = [];
   for (let i = 0; i < changes.length; i++) {
@@ -232,6 +240,18 @@ function buildIntervals(changes, now, ec) {
     else out.push({ a, b, c });
   }
   return out;
+}
+
+/**
+ * Start of the current ON/OFF period, based on the classified intervals (not on
+ * last_changed, which changes on every value update of a numeric sensor).
+ * Returns { since, partial } or null. `partial` = the period started before the
+ * loaded history, so the real duration is at least the computed one.
+ */
+function currentPeriod(intervals, cls, historyFrom) {
+  const last = intervals[intervals.length - 1];
+  if (!last || last.c !== cls) return null;
+  return { since: last.a, partial: Number.isFinite(historyFrom) && last.a <= historyFrom + 1000 };
 }
 
 /** Clips intervals to a window. Returns blocks, on-time and unavailable-time (ms). */
@@ -276,6 +296,16 @@ function formatDuration(ms, fmt) {
   const totalMin = Math.round(ms / 60000);
   const h = Math.floor(totalMin / 60), m = totalMin % 60;
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+}
+
+/** Elapsed time for the state badge: "<1m", "45m", "2h 05m", "3d 4h". */
+function formatElapsed(ms) {
+  const totalMin = Math.floor(Math.max(0, ms) / 60000);
+  if (totalMin < 1) return "<1m";
+  const d = Math.floor(totalMin / 1440), h = Math.floor((totalMin % 1440) / 60), m = totalMin % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -348,6 +378,8 @@ function normalizeEntities(c) {
       invert: e.invert ?? c.invert,
       on_above: e.on_above ?? c.on_above,
       show_value: e.show_value ?? c.show_value,
+      show_on_duration: (e.show_on_duration ?? c.show_on_duration) !== false,
+      show_off_duration: (e.show_off_duration ?? c.show_off_duration) === true,
       _onStates: toList(e.on_states ?? c.on_states, DEFAULT_ON_STATES),
       _offStates: toList(e.off_states ?? c.off_states, []),
     };
@@ -403,6 +435,8 @@ class StatusTimelineCard extends HTMLElement {
     c._startMin = win.startMin; c._endMin = win.endMin; c._lenMin = win.lenMin;
     if (!DUTY_BASES.includes(c.duty_cycle_basis))
       throw new Error(`Invalid duty_cycle_basis "${c.duty_cycle_basis}". Use one of: ${DUTY_BASES.join(", ")}.`);
+    if (!RUNNING_INDICATORS.includes(c.running_indicator))
+      throw new Error(`Invalid running_indicator "${c.running_indicator}". Use one of: ${RUNNING_INDICATORS.join(", ")}.`);
     c.duty_cycle_decimals = Math.min(2, Math.max(0, parseInt(c.duty_cycle_decimals, 10) || 0));
     c.refresh_interval = Math.max(30, Number(c.refresh_interval) || DEFAULTS.refresh_interval);
     const autoH = c._entities.length === 1 ? 18 : 14;
@@ -433,6 +467,7 @@ class StatusTimelineCard extends HTMLElement {
 
   connectedCallback() {
     clearInterval(this._timer);
+    // Re-render every minute: keeps "now", running totals and on/off durations current.
     this._timer = setInterval(() => { this._render(); this._maybeFetch(); }, 60000);
     if (!this._ro && window.ResizeObserver) {
       this._ro = new ResizeObserver(() => this._fitLabels());
@@ -490,6 +525,18 @@ class StatusTimelineCard extends HTMLElement {
     if (mode === "raw") return raw;
     if (mode === "mapped_only") return this._statusText(e.cur);
     return isRemapped(e.st.state, e.ec) ? this._statusText(e.cur) : raw;
+  }
+
+  /** "On for" / "Off for" duration of the current period, if enabled for this entity and state. */
+  _periodInfo(e, now, tz) {
+    const wanted = (e.cur === "on" && e.ec.show_on_duration) || (e.cur === "off" && e.ec.show_off_duration);
+    if (!wanted || !this._history) return null;
+    const p = currentPeriod(e.intervals, e.cur, this._fetchedFrom);
+    if (!p) return null;
+    const dur = `${p.partial ? "≥ " : ""}${formatElapsed(now - p.since)}`;
+    const w = wallParts(now, tz);
+    const sinceTxt = `${this._t("since")} ${this._fmtTime(p.since, tz, Date.UTC(w.y, w.m, w.d))}`;
+    return { dur, sinceTxt: p.partial ? `${this._t("since")} ≤ ${this._fmtTime(p.since, tz, -1)}` : sinceTxt };
   }
 
   _maybeFetch() {
@@ -569,10 +616,11 @@ class StatusTimelineCard extends HTMLElement {
 
   /**
    * Builds one current-state chip. Numeric threshold entities show "value | status".
+   * Optional "· 2h 15m" duration of the current on/off period inside the status badge.
    * The entity color is NOT written into the HTML: elements carry data-e="<index>"
    * and the color is applied afterwards with style.setProperty() (see _applyStyles).
    */
-  _chipHtml(e, i) {
+  _chipHtml(e, i, now, tz) {
     if (!e.st) return `<div class="chip missing" data-e="${i}"><span class="dot"></span>${esc(this._t("not_found"))}: ${esc(e.ec.entity)}</div>`;
     const icon = e.ec.icon || e.st.attributes.icon || "";
     const numeric = isNumericRule(e.st.state, e.ec);
@@ -587,10 +635,13 @@ class StatusTimelineCard extends HTMLElement {
       badge = this._stateText(e);
       tip = `${e.ec.entity} · ${e.st.state}`;
     }
+    const per = this._periodInfo(e, now, tz);
+    if (per) tip += ` · ${this._statusText(e.cur)} ${per.sinceTxt} (${per.dur})`;
+    const durHtml = per ? `<span class="dur">${esc(per.dur)}</span>` : "";
     return `<div class="chip ${e.cur}" data-i="${i}" data-e="${i}" title="${esc(tip)}">
         <span class="ico">${icon ? `<ha-icon icon="${esc(icon)}"></ha-icon>` : `<ha-state-icon data-i="${i}"></ha-state-icon>`}</span>
         <span class="nm">${esc(e.name)}</span>
-        ${valueHtml}<span class="badge">${esc(badge)}</span>
+        ${valueHtml}<span class="badge">${esc(badge)}${durHtml}</span>
       </div>`;
   }
 
@@ -652,13 +703,14 @@ class StatusTimelineCard extends HTMLElement {
     }
     const gridHtml = ticks.map((t) => `<div class="gl" style="left:${t.pct.toFixed(3)}%"></div>`).join("");
 
-    const headerHtml = c.show_state ? `<div class="states">${ents.map((e, i) => this._chipHtml(e, i)).join("")}</div>` : "";
+    const headerHtml = c.show_state ? `<div class="states">${ents.map((e, i) => this._chipHtml(e, i, now, tz)).join("")}</div>` : "";
     const titleHtml = c.title || (!multi && !c.show_state) ? `<div class="title">${esc(c.title || ents[0].name)}</div>` : "";
 
     // Day groups
     const daysHtml = rows.map((r) => {
       const span = r.end - r.start;
       const elapsed = Math.max(0, Math.min(r.end, now) - r.start);
+      const live = now >= r.start && now < r.end;
       let futureHtml = "", nowHtml = "";
       if (now < r.end) {
         const p = Math.max(0, ((now - r.start) / span) * 100);
@@ -688,8 +740,17 @@ class StatusTimelineCard extends HTMLElement {
         const dcTxt = dc && elapsed > 0 ? formatPct(dc.pct, c.duty_cycle_decimals) : "–";
         const dcTip = dc ? `${e.name} · ${this._t("duty")}: ${formatDuration(onMs, "hm")} / ${formatDuration(dc.base, "hm")} ${basisTxt}` : "";
         const row = i + 1;
+
+        // Running indicator: current period + entity currently ON -> total is increasing.
+        const running = live && e.cur === "on" && !!this._history && c.running_indicator !== "none";
+        const totalTxt = elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–";
+        let totalInner = totalTxt, totalCls = "total";
+        if (running && c.running_indicator === "box") { totalInner = `<span class="run-box">${totalTxt}</span>`; totalCls += " running"; }
+        if (running && c.running_indicator === "badge") { totalInner = `<span class="run-badge">${esc(this._t("on_short"))}</span>${totalTxt}`; totalCls += " running"; }
+        const totalTip = running ? `${this._t("running")}${dcTip ? ` · ${dcTip}` : ""}` : dcTip;
         const totalHtml = c.show_total
-          ? `<div class="total" data-r="${row}" data-e="${i}" title="${esc(dcTip)}">${elapsed > 0 ? esc(formatDuration(onMs, c.total_format)) : "–"}</div>` : "";
+          ? `<div class="${totalCls}" data-r="${row}" data-e="${i}" title="${esc(totalTip)}">${totalInner}</div>` : "";
+
         const pVal = dc ? Math.min(100, dc.pct).toFixed(1) : "0";
         const dutyHtml = c.show_duty_cycle
           ? `<div class="duty" data-r="${row}" data-e="${i}" data-p="${pVal}" title="${esc(dcTip)}">${esc(dcTxt)}</div>` : "";
@@ -717,7 +778,8 @@ class StatusTimelineCard extends HTMLElement {
 
     // Only numbers are interpolated into the stylesheet; colors are set via setProperty().
     const dutyW = 38 + 7 * Number(c.duty_cycle_decimals);
-    const cols = `78px 1fr${c.show_total ? " 64px" : ""}${c.show_duty_cycle ? ` ${dutyW}px` : ""}`;
+    const totalW = c.running_indicator === "badge" ? 94 : c.running_indicator === "box" ? 74 : 64;
+    const cols = `78px 1fr${c.show_total ? ` ${totalW}px` : ""}${c.show_duty_cycle ? ` ${dutyW}px` : ""}`;
 
     root.innerHTML = `
       <style>
@@ -735,6 +797,8 @@ class StatusTimelineCard extends HTMLElement {
                      color: var(--primary-text-color); padding-left:6px; border-left:1px solid color-mix(in srgb, var(--c) 40%, transparent); }
         .chip .badge { font-size:12px; padding:1px 8px; border-radius:10px; white-space:nowrap;
                        background: var(--stc-off); color: var(--secondary-text-color); }
+        .chip .badge .dur { font-variant-numeric: tabular-nums; opacity:.9; }
+        .chip .badge .dur::before { content:"·"; margin:0 4px; }
         .chip.on .badge { background: var(--c); color: #fff; }
         .chip.unav .badge { font-style: italic; }
         .chip.missing { color: var(--error-color); padding:3px 10px; }
@@ -754,8 +818,14 @@ class StatusTimelineCard extends HTMLElement {
                   font-variant-numeric: tabular-nums; text-shadow: 0 0 2px rgba(0,0,0,.55); pointer-events:none; visibility:hidden; }
         .future { position:absolute; top:0; bottom:0; right:0; background: var(--card-background-color, #fff); opacity:.55; }
         .now { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background: var(--error-color, #db4437); }
-        .total { grid-column:3; font-size:12px; text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap;
-                 color: var(--primary-text-color); border-right: 3px solid var(--c); padding-right:5px; line-height: var(--stc-h); }
+        .total { grid-column:3; display:flex; align-items:center; justify-content:flex-end; gap:4px; height: var(--stc-h);
+                 font-size:12px; font-variant-numeric: tabular-nums; white-space:nowrap;
+                 color: var(--primary-text-color); border-right: 3px solid var(--c); padding-right:5px; }
+        .total .run-box { background: var(--c); color:#fff; border-radius: 8px; padding: 0 6px;
+                          line-height: calc(var(--stc-h) - 2px); font-weight:500; }
+        .total .run-badge { background: var(--c); color:#fff; border-radius: 8px; padding: 0 5px; font-size:9px; font-weight:700;
+                            letter-spacing:.4px; line-height: calc(var(--stc-h) - 4px); }
+        .total.running { font-weight:500; }
         .duty { grid-column:-2 / -1; position:relative; font-size:11px; text-align:right; font-variant-numeric: tabular-nums;
                 white-space:nowrap; color: var(--secondary-text-color); line-height: var(--stc-h); padding-right:2px; }
         .duty::after { content:""; position:absolute; left:0; bottom:1px; height:2px; width:var(--p, 0%); max-width:100%;
@@ -797,7 +867,8 @@ class StatusTimelineCard extends HTMLElement {
 /* Visual editor                                                       */
 /* ------------------------------------------------------------------ */
 
-const E_FIELDS = ["entity", "name", "color", "icon", "on_states", "off_states", "on_above", "invert", "show_value"];
+const E_FIELDS = ["entity", "name", "color", "icon", "on_states", "off_states", "on_above", "invert",
+  "show_value", "show_on_duration", "show_off_duration"];
 
 function toFormData(cfg) {
   const d = { ...cfg };
@@ -869,6 +940,10 @@ const EDITOR_SCHEMA = [
     { name: "show_total", selector: { boolean: {} } },
     { name: "total_format", selector: { select: { mode: "dropdown", options: [
       { value: "hm", label: "5h 07m" }, { value: "decimal", label: "5.12 h" }] } } },
+    { name: "running_indicator", selector: { select: { mode: "dropdown", options: [
+      { value: "box", label: "Colored box around the total" },
+      { value: "badge", label: "Small 'ON' badge left of the total" },
+      { value: "none", label: "None" }] } } },
   ] },
   { type: "grid", name: "", flatten: true, schema: [
     { name: "show_duty_cycle", selector: { boolean: {} } },
@@ -884,6 +959,8 @@ const EDITOR_SCHEMA = [
       { value: "mapped", label: "Mapped (raw unless remapped)" },
       { value: "mapped_only", label: "Always On / Off" },
       { value: "raw", label: "Raw HA state" }] } } },
+    { name: "show_on_duration", selector: { boolean: {} } },
+    { name: "show_off_duration", selector: { boolean: {} } },
     { name: "show_value", selector: { boolean: {} } },
     { name: "show_block_values", selector: { boolean: {} } },
     { name: "show_summary", selector: { boolean: {} } },
@@ -916,7 +993,9 @@ const LABELS = {
   partial_day: "Partial day (end later than start, same day)", days: "Days (1–10)",
   include_today: "Include current day", order: "Order", show_state: "Show current state",
   state_display: "Current state text", show_value: "Show value for numeric (threshold) entities",
+  show_on_duration: "Show how long it has been ON", show_off_duration: "Show how long it has been OFF",
   show_total: "Total on-time (right)", total_format: "Total format",
+  running_indicator: "Running indicator (current day, entity ON)",
   show_duty_cycle: "Duty cycle % (right of total)", duty_cycle_basis: "Duty cycle basis",
   duty_cycle_decimals: "Duty cycle decimals (0–2)",
   show_block_values: "Duration inside bars (if it fits)",
@@ -974,7 +1053,8 @@ class StatusTimelineCardEditor extends HTMLElement {
 
 StatusTimelineCard._helpers = {
   parseTime, validateWindow, computeRows, classify, isRemapped, isNumericRule, buildIntervals, clipToWindow,
-  dutyCycle, formatPct, formatDuration, normalizeEntities, toFormData, fromFormData, sanitizeColor, invalidColors,
+  currentPeriod, dutyCycle, formatPct, formatDuration, formatElapsed, normalizeEntities, toFormData, fromFormData,
+  sanitizeColor, invalidColors,
 };
 
 if (!customElements.get(CARD_TAG)) {
