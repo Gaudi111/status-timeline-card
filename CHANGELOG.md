@@ -7,6 +7,22 @@ Versioning scheme:
 GitHub releases use the same number (HACS / Marketplace read them).
 Releases up to `2026.10.6` used `YYYY.MM.S` from the first release of the month and are kept unchanged.
 
+## 2026.11.2
+### Added
+- **ON / OFF duration in the state chip**: the status badge shows how long the entity has been in its current
+  state, e.g. `On · 2h 15m`. Tooltip shows the start time (`On since 09:37 (2h 15m)`).
+  - `show_on_duration` (default `true`) and `show_off_duration` (default `false`), selectable independently,
+    card-wide (visual editor) or per entity (YAML).
+  - Calculated from the classified history, so numeric threshold sensors show the time since the threshold was
+    crossed, not since the last value change. OFF-mapped states (`off_states`) count as OFF.
+  - Shown as `≥ 3d 4h` when the period started before the loaded history.
+- **Running indicator** for the current day when the entity is ON (its total is increasing):
+  `running_indicator: box` (default, total in a rounded box in the entity color), `badge` (small `ON` pill left of
+  the total) or `none`. Tooltip: *Running – total is increasing*.
+### Changed
+- Total column widened slightly when a running indicator is enabled.
+- Durations and running indicator refresh every minute.
+
 ## 2026.11.1
 ### Security
 - **Color options can no longer inject markup or CSS** (reported in the HACS default-repository review).
